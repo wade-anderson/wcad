@@ -333,7 +333,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
     viewport_container.append(&status_bar);
 
-    main_layout.append(&viewport_container);
+    // viewport_container will be added to a Paned below
 
     // Sidebar (Property Editor)
     let sidebar = Box::builder()
@@ -372,7 +372,24 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_add_layer = Button::with_label("Add Layer");
     sidebar.append(&btn_add_layer);
 
-    main_layout.append(&sidebar);
+    let sidebar_scroll = gtk4::ScrolledWindow::builder()
+        .child(&sidebar)
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .propagate_natural_width(true)
+        .min_content_width(200)
+        .build();
+
+    let paned = gtk4::Paned::builder()
+        .orientation(Orientation::Horizontal)
+        .start_child(&viewport_container)
+        .end_child(&sidebar_scroll)
+        .wide_handle(true)
+        .shrink_start_child(false)
+        .shrink_end_child(false)
+        .build();
+    paned.set_position(950);
+    
+    main_layout.append(&paned);
 
     let update_sidebar_weak: Rc<RefCell<Option<Weak<dyn Fn()>>>> = Rc::new(RefCell::new(None));
 
