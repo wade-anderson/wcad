@@ -148,6 +148,27 @@ impl Renderer {
         }
     }
 
+    pub fn update_view(&self, offset: [f32; 2], zoom: f32, width: f32, height: f32) {
+        let aspect = width / height;
+        
+        // Orthographic projection matrix
+        // We want (0, 0) to be in the center initially, so we go from -aspect to aspect and -1 to 1
+        // Then we apply zoom and offset.
+        let ortho = nalgebra::Orthographic3::new(
+            -aspect / zoom + offset[0],
+            aspect / zoom + offset[0],
+            -1.0 / zoom + offset[1],
+            1.0 / zoom + offset[1],
+            -1.0,
+            1.0,
+        );
+
+        let matrix = ortho.to_homogeneous();
+        let matrix_ref: &[[f32; 4]; 4] = matrix.as_ref();
+        
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(matrix_ref));
+    }
+
     pub fn render(&self, width: u32, height: u32, vertices: &[Vertex]) -> Vec<u8> {
         let texture_desc = wgpu::TextureDescriptor {
             size: wgpu::Extent3d {

@@ -1782,6 +1782,7 @@ dependencies = [
  "libadwaita",
  "log",
  "lyon",
+ "nalgebra",
  "pollster",
  "wcad-core",
  "wgpu",
