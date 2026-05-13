@@ -49,6 +49,7 @@ pub struct AppState {
     pub redo_stack: Vec<UndoState>,
     pub grid_size: f64,
     pub grid_enabled: bool,
+    pub mouse_world_pos: Point2<f64>,
 }
 
 impl AppState {
@@ -212,6 +213,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         redo_stack: Vec::new(),
         grid_size: 0.1,
         grid_enabled: true,
+        mouse_world_pos: Point2::new(0.0, 0.0),
     }));
 
     let main_layout = Box::builder()
@@ -709,6 +711,86 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         props_container.append(&row);
                     }
                 }
+            } else if !app.click_buffer.is_empty() {
+                let snapped = app.mouse_world_pos;
+                match app.active_tool {
+                    Tool::Line => {
+                        let start = app.click_buffer[0];
+                        let dist = (snapped - start).norm();
+                        let angle = (snapped.y - start.y).atan2(snapped.x - start.x).to_degrees();
+                        props_container.append(&libadwaita::ActionRow::builder().title("Type: Line (Preview)").build());
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Length: {:.3}", dist)).build());
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Angle: {:.1}°", angle)).build());
+                    }
+                    Tool::Circle => {
+                        let center = app.click_buffer[0];
+                        let radius = (snapped - center).norm();
+                        props_container.append(&libadwaita::ActionRow::builder().title("Type: Circle (Preview)").build());
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
+                    }
+                    Tool::Rectangle => {
+                        let start = app.click_buffer[0];
+                        let w = (snapped.x - start.x).abs();
+                        let h = (snapped.y - start.y).abs();
+                        props_container.append(&libadwaita::ActionRow::builder().title("Type: Rect (Preview)").build());
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Width: {:.3}", w)).build());
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Height: {:.3}", h)).build());
+                    }
+                    Tool::Arc => {
+                        let center = app.click_buffer[0];
+                        props_container.append(&libadwaita::ActionRow::builder().title("Type: Arc (Preview)").build());
+                        if app.click_buffer.len() == 1 {
+                            let radius = (snapped - center).norm();
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
+                        } else if app.click_buffer.len() == 2 {
+                            let p1 = app.click_buffer[1];
+                            let radius = (p1 - center).norm();
+                            let start_angle = (p1.y - center.y).atan2(p1.x - center.x).to_degrees();
+                            let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x).to_degrees();
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Start: {:.1}°", start_angle)).build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("End: {:.1}°", end_angle)).build());
+                        }
+                    }
+                    Tool::DimLinear => {
+                        if app.click_buffer.len() == 2 {
+                            let p1 = app.click_buffer[0];
+                            let p2 = app.click_buffer[1];
+                            let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
+                            let val = if horizontal { (p2.x - p1.x).abs() } else { (p2.y - p1.y).abs() };
+                            props_container.append(&libadwaita::ActionRow::builder().title("Type: Linear Dim (Preview)").build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Distance: {:.3}", val)).build());
+                        }
+                    }
+                    Tool::DimAligned => {
+                        if app.click_buffer.len() == 2 {
+                            let p1 = app.click_buffer[0];
+                            let p2 = app.click_buffer[1];
+                            let dist = (p2 - p1).norm();
+                            props_container.append(&libadwaita::ActionRow::builder().title("Type: Aligned Dim (Preview)").build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Distance: {:.3}", dist)).build());
+                        }
+                    }
+                    Tool::DimRadial => {
+                        if app.click_buffer.len() == 2 {
+                            let center = app.click_buffer[0];
+                            let point = app.click_buffer[1];
+                            let radius = (point - center).norm();
+                            props_container.append(&libadwaita::ActionRow::builder().title("Type: Radial Dim (Preview)").build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
+                        }
+                    }
+                    Tool::Polyline => {
+                        let mut pts = app.click_buffer.clone();
+                        pts.push(snapped);
+                        props_container.append(&libadwaita::ActionRow::builder().title(&format!("Type: Polyline (Preview - {} pts)", pts.len())).build());
+                        if pts.len() >= 2 {
+                            let total_dist: f64 = pts.windows(2).map(|w| (w[1] - w[0]).norm()).sum();
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Total Length: {:.3}", total_dist)).build());
+                        }
+                    }
+                    _ => {}
+                }
             } else if app.selected_indices.is_empty() {
                 props_container.append(&gtk4::Label::new(Some("No selection")));
             } else {
@@ -994,9 +1076,10 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let app_state_motion = app_state.clone();
     let viewport_motion = viewport.clone();
     let status_bar_motion = status_bar.clone();
+    let update_sidebar_motion = update_sidebar.clone();
     motion_controller.connect_motion(move |_controller, x, y| {
         let mut view = view_state_motion.borrow_mut();
-        let app = app_state_motion.borrow();
+        let mut app = app_state_motion.borrow_mut();
         view.cursor_pos = [x as f32, y as f32];
         
         let world = pixel_to_world(
@@ -1006,9 +1089,19 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         );
         let world_point = Point2::from(world);
         let snapped = app.snap_point(world_point, view.zoom);
+        app.mouse_world_pos = snapped;
         
         status_bar_motion.set_label(&format!("X: {:.3}, Y: {:.3}", snapped.x, snapped.y));
         
+        let needs_sidebar_update = !app.click_buffer.is_empty();
+        
+        drop(app);
+        drop(view);
+        
+        if needs_sidebar_update {
+            update_sidebar_motion();
+        }
+
         viewport_motion.queue_draw();
     });
     viewport.add_controller(motion_controller);
@@ -1481,7 +1574,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true,
+            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Add an entity
@@ -1516,7 +1609,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true,
+            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         state.delete_selected();
@@ -1550,7 +1643,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true,
+            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Snap to endpoint (0,0) - within 0.02 threshold
