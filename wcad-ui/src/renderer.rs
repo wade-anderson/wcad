@@ -34,6 +34,12 @@ pub struct Renderer {
     render_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    
+    // Cached resources
+    render_texture: Option<wgpu::Texture>,
+    output_buffer: Option<wgpu::Buffer>,
+    width: u32,
+    height: u32,
 }
 
 impl Renderer {
@@ -145,47 +151,59 @@ impl Renderer {
             render_pipeline,
             camera_buffer,
             camera_bind_group,
+            render_texture: None,
+            output_buffer: None,
+            width: 0,
+            height: 0,
         }
     }
 
     pub fn update_view(&self, offset: [f32; 2], zoom: f32, width: f32, height: f32) {
-        let aspect = width / height;
-        
-        // Orthographic projection matrix
-        // We want (0, 0) to be in the center initially, so we go from -aspect to aspect and -1 to 1
-        // Then we apply zoom and offset.
-        let ortho = nalgebra::Orthographic3::new(
-            -aspect / zoom + offset[0],
-            aspect / zoom + offset[0],
-            -1.0 / zoom + offset[1],
-            1.0 / zoom + offset[1],
-            -1.0,
-            1.0,
-        );
-
-        let matrix = ortho.to_homogeneous();
+        let matrix = calculate_projection_matrix(offset, zoom, width, height);
         let matrix_ref: &[[f32; 4]; 4] = matrix.as_ref();
-        
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(matrix_ref));
     }
 
-    pub fn render(&self, width: u32, height: u32, vertices: &[Vertex]) -> Vec<u8> {
-        let texture_desc = wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            label: None,
-            view_formats: &[],
-        };
-        let texture = self.device.create_texture(&texture_desc);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    pub fn render(&mut self, width: u32, height: u32, vertices: &[Vertex]) -> Vec<u8> {
+        if width == 0 || height == 0 {
+            return Vec::new();
+        }
+
+        // Recreate resources if size changed
+        if self.width != width || self.height != height || self.render_texture.is_none() {
+            let texture_desc = wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                label: Some("Render Texture"),
+                view_formats: &[],
+            };
+            self.render_texture = Some(self.device.create_texture(&texture_desc));
+
+            let u32_size = std::mem::size_of::<u32>() as u32;
+            let bytes_per_row = (u32_size * width + 255) & !255;
+            let output_buffer_size = (bytes_per_row * height) as wgpu::BufferAddress;
+            let output_buffer_desc = wgpu::BufferDescriptor {
+                size: output_buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                label: Some("Output Buffer"),
+                mapped_at_creation: false,
+            };
+            self.output_buffer = Some(self.device.create_buffer(&output_buffer_desc));
+            self.width = width;
+            self.height = height;
+        }
+
+        let render_texture = self.render_texture.as_ref().unwrap();
+        let output_buffer = self.output_buffer.as_ref().unwrap();
+        let view = render_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -219,31 +237,27 @@ impl Renderer {
 
         let u32_size = std::mem::size_of::<u32>() as u32;
         let bytes_per_row = (u32_size * width + 255) & !255;
-        let output_buffer_size = (bytes_per_row * height) as wgpu::BufferAddress;
-        let output_buffer_desc = wgpu::BufferDescriptor {
-            size: output_buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            label: None,
-            mapped_at_creation: false,
-        };
-        let output_buffer = self.device.create_buffer(&output_buffer_desc);
 
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
                 aspect: wgpu::TextureAspect::All,
-                texture: &texture,
+                texture: render_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
             },
             wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
+                buffer: output_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
                     bytes_per_row: Some(bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
-            texture_desc.size,
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
 
         self.queue.submit(Some(encoder.finish()));
@@ -267,5 +281,44 @@ impl Renderer {
         } else {
             panic!("Failed to read buffer from GPU");
         }
+    }
+}
+
+fn calculate_projection_matrix(offset: [f32; 2], zoom: f32, width: f32, height: f32) -> nalgebra::Matrix4<f32> {
+    let aspect = width / height;
+    let ortho = nalgebra::Orthographic3::new(
+        -aspect / zoom + offset[0],
+        aspect / zoom + offset[0],
+        -1.0 / zoom + offset[1],
+        1.0 / zoom + offset[1],
+        -1.0,
+        1.0,
+    );
+    ortho.to_homogeneous()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_projection_matrix_identity() {
+        // At zoom 1.0, offset 0.0, 1:1 aspect ratio, 
+        // the matrix should project (-1,-1) to (-1,-1) and (1,1) to (1,1)
+        let matrix = calculate_projection_matrix([0.0, 0.0], 1.0, 100.0, 100.0);
+        let p = nalgebra::Vector4::new(1.0, 1.0, 0.0, 1.0);
+        let result = matrix * p;
+        assert!((result.x - 1.0).abs() < 1e-6);
+        assert!((result.y - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_projection_matrix_zoom() {
+        // At zoom 2.0, everything should be twice as large in clip space
+        let matrix = calculate_projection_matrix([0.0, 0.0], 2.0, 100.0, 100.0);
+        let p = nalgebra::Vector4::new(0.5, 0.5, 0.0, 1.0);
+        let result = matrix * p;
+        assert!((result.x - 1.0).abs() < 1e-6);
+        assert!((result.y - 1.0).abs() < 1e-6);
     }
 }

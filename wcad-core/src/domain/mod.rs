@@ -31,3 +31,37 @@ impl Geometry for Entity {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_point_bounding_box() {
+        let p = Point2::new(10.0, 20.0);
+        let entity = Entity::Point(p);
+        let (min, max) = entity.bounding_box();
+        assert_eq!(min, p);
+        assert_eq!(max, p);
+    }
+
+    #[test]
+    fn test_line_bounding_box() {
+        let start = Point2::new(0.0, 10.0);
+        let end = Point2::new(10.0, 0.0);
+        let entity = Entity::Line { start, end };
+        let (min, max) = entity.bounding_box();
+        assert_eq!(min, Point2::new(0.0, 0.0));
+        assert_eq!(max, Point2::new(10.0, 10.0));
+    }
+
+    #[test]
+    fn test_circle_bounding_box() {
+        let center = Point2::new(5.0, 5.0);
+        let radius = 2.0;
+        let entity = Entity::Circle { center, radius };
+        let (min, max) = entity.bounding_box();
+        assert_eq!(min, Point2::new(3.0, 3.0));
+        assert_eq!(max, Point2::new(7.0, 7.0));
+    }
+}
