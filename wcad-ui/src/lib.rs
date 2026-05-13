@@ -1506,7 +1506,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         }
 
         let refs: Vec<(&Entity, [f32; 3])> = render_entities.iter().map(|(e, c)| (e, *c)).collect();
-        let (vertices, indices) = tessellate_entities(&refs);
+        let (vertices, indices) = tessellate_entities(&refs, view.zoom, height as f32);
         let data = renderer.render(width as u32, height as u32, &vertices, &indices);
         
         if data.is_empty() { return; }

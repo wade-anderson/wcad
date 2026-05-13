@@ -51,11 +51,16 @@ fn add_arrowhead(builder: &mut lyon::path::Builder, tip: Point2<f64>, from: Poin
     builder.end(false);
 }
 
-pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
+pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])], zoom: f32, height: f32) -> (Vec<Vertex>, Vec<u32>) {
     let mut geometry: VertexBuffers<Vertex, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
+    
+    // Maintain a minimum visual thickness of ~1.2 pixels
+    let pixel_scale = 2.0 / (height * zoom);
+    let line_width = (1.2 * pixel_scale).max(0.005);
+    
     let options = StrokeOptions::default()
-        .with_line_width(0.008)
+        .with_line_width(line_width)
         .with_line_cap(LineCap::Round);
 
     for entity in entities {
@@ -63,7 +68,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
         let mut builder = Path::builder();
         match &geom.geometry {
             GeometryKind::Point(p) => {
-                let size = 0.005f32;
+                let size = (1.0 * pixel_scale).max(0.003);
                 builder.begin(point((p.x - size as f64) as f32, p.y as f32));
                 builder.line_to(point((p.x + size as f64) as f32, p.y as f32));
                 builder.end(false);
@@ -133,9 +138,9 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         } else {
                             ( (p2.y - p1.y).abs(), Point2::new(p_line.x, p1.y), Point2::new(p_line.x, p2.y) )
                         };
-                        let dash = 0.02f32;
-                        let gap = 0.01f32;
-                        let extension_overshoot = 0.02;
+                        let dash = (2.5 * pixel_scale).max(0.015) as f32;
+                        let gap = (1.5 * pixel_scale).max(0.01) as f32;
+                        let extension_overshoot = (2.5 * pixel_scale).max(0.015) as f64;
                         
                         // Extension lines (Dashed)
                         let dir1 = (p1_dim - p1).normalize();
@@ -152,7 +157,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         builder.end(false);
                         
                         // Arrowheads
-                        let arrow_size = 0.02f32;
+                        let arrow_size = (3.0 * pixel_scale).max(0.015) as f32;
                         add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
                         add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
                     }
@@ -162,9 +167,9 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         let offset = (p_line - p1).dot(&normal);
                         let p1_dim = p1 + normal * offset;
                         let p2_dim = p2 + normal * offset;
-                        let dash = 0.02f32;
-                        let gap = 0.01f32;
-                        let extension_overshoot = 0.02;
+                        let dash = (2.5 * pixel_scale).max(0.015) as f32;
+                        let gap = (1.5 * pixel_scale).max(0.01) as f32;
+                        let extension_overshoot = (2.5 * pixel_scale).max(0.015) as f64;
 
                         // Extension lines (Dashed)
                         let dir1 = (p1_dim - p1).normalize();
@@ -181,7 +186,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         builder.end(false);
 
                         // Arrowheads
-                        let arrow_size = 0.02f32;
+                        let arrow_size = (3.0 * pixel_scale).max(0.015) as f32;
                         add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
                         add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
                     }
@@ -195,7 +200,8 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         builder.end(false);
                         
                         // Arrowhead at circle point
-                        add_arrowhead(&mut builder, *p_on_circle, *center, 0.02f32);
+                        let arrow_size = (3.0 * pixel_scale).max(0.015) as f32;
+                        add_arrowhead(&mut builder, *p_on_circle, *center, arrow_size);
                     }
                 }
             }
@@ -252,7 +258,7 @@ mod tests {
             end: Point2::new(1.0, 1.0),
         }, "0");
         let entities = vec![(&entity, [1.0, 1.0, 1.0])];
-        let (vertices, indices) = tessellate_entities(&entities);
+        let (vertices, indices) = tessellate_entities(&entities, 1.0, 800.0);
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
         // A line stroke with thickness should have at least 4 vertices (a quad)
@@ -267,7 +273,7 @@ mod tests {
             radius: 1.0,
         }, "0");
         let entities = vec![(&entity, [1.0, 1.0, 1.0])];
-        let (vertices, indices) = tessellate_entities(&entities);
+        let (vertices, indices) = tessellate_entities(&entities, 1.0, 800.0);
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
         // A circle with 64 segments should have many more vertices than a line
