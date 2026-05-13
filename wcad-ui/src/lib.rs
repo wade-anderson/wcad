@@ -4,16 +4,18 @@ pub mod tessellator;
 use libadwaita::prelude::*;
 use libadwaita::{Application, ApplicationWindow, HeaderBar};
 use gtk4::{Box, Orientation, DrawingArea, Button, Separator};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use renderer::Renderer;
-use wcad_core::domain::Entity;
+use wcad_core::domain::{Entity, GeometryKind, Layer, Geometry};
 use tessellator::tessellate_entities;
 use nalgebra::Point2;
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Tool {
     Select,
+    Point,
     Line,
     Circle,
     Rectangle,
@@ -27,22 +29,33 @@ pub struct ViewState {
     pub cursor_pos: [f32; 2],
 }
 
+pub struct UndoState {
+    pub entities: Vec<Entity>,
+    pub layers: Vec<Layer>,
+    pub active_layer_index: usize,
+}
+
 pub struct AppState {
     pub entities: Vec<Entity>,
+    pub layers: Vec<Layer>,
+    pub active_layer_index: usize,
     pub active_tool: Tool,
     pub click_buffer: Vec<Point2<f64>>,
     pub selected_indices: Vec<usize>,
-    pub undo_stack: Vec<Vec<Entity>>,
-    pub redo_stack: Vec<Vec<Entity>>,
+    pub undo_stack: Vec<UndoState>,
+    pub redo_stack: Vec<UndoState>,
     pub grid_size: f64,
     pub grid_enabled: bool,
 }
 
 impl AppState {
     pub fn push_undo(&mut self) {
-        self.undo_stack.push(self.entities.clone());
+        self.undo_stack.push(UndoState {
+            entities: self.entities.clone(),
+            layers: self.layers.clone(),
+            active_layer_index: self.active_layer_index,
+        });
         self.redo_stack.clear();
-        // Limit stack size to 50
         if self.undo_stack.len() > 50 {
             self.undo_stack.remove(0);
         }
@@ -50,16 +63,28 @@ impl AppState {
 
     pub fn undo(&mut self) {
         if let Some(prev) = self.undo_stack.pop() {
-            self.redo_stack.push(self.entities.clone());
-            self.entities = prev;
+            self.redo_stack.push(UndoState {
+                entities: self.entities.clone(),
+                layers: self.layers.clone(),
+                active_layer_index: self.active_layer_index,
+            });
+            self.entities = prev.entities;
+            self.layers = prev.layers;
+            self.active_layer_index = prev.active_layer_index;
             self.selected_indices.clear();
         }
     }
 
     pub fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(self.entities.clone());
-            self.entities = next;
+            self.undo_stack.push(UndoState {
+                entities: self.entities.clone(),
+                layers: self.layers.clone(),
+                active_layer_index: self.active_layer_index,
+            });
+            self.entities = next.entities;
+            self.layers = next.layers;
+            self.active_layer_index = next.active_layer_index;
             self.selected_indices.clear();
         }
     }
@@ -86,8 +111,8 @@ impl AppState {
 
         // Snap to endpoints
         for entity in &self.entities {
-            match entity {
-                Entity::Line { start, end } => {
+            match &entity.geometry {
+                GeometryKind::Line { start, end } => {
                     let d1 = (start - point).norm();
                     if d1 < best_dist {
                         best_dist = d1;
@@ -99,21 +124,14 @@ impl AppState {
                         snapped = *end;
                     }
                 }
-                Entity::Circle { center, .. } => {
+                GeometryKind::Circle { center, .. } => {
                     let d = (center - point).norm();
                     if d < best_dist {
                         best_dist = d;
                         snapped = *center;
                     }
                 }
-                Entity::Point(p) => {
-                    let d = (p - point).norm();
-                    if d < best_dist {
-                        best_dist = d;
-                        snapped = *p;
-                    }
-                }
-                Entity::Rectangle { start, end } => {
+                GeometryKind::Rectangle { start, end } => {
                     let corners = [
                         *start,
                         Point2::new(end.x, start.y),
@@ -128,24 +146,28 @@ impl AppState {
                         }
                     }
                 }
-                Entity::Arc { center, radius, start_angle, sweep_angle } => {
-                    let d = (center - point).norm();
-                    if d < best_dist {
-                        best_dist = d;
+                GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
+                    // Snap to center
+                    let d_c = (center - point).norm();
+                    if d_c < best_dist {
+                        best_dist = d_c;
                         snapped = *center;
                     }
+                    // Snap to endpoints
                     let p1 = center + nalgebra::Vector2::new(start_angle.cos() * radius, start_angle.sin() * radius);
-                    let end_a = start_angle + sweep_angle;
-                    let p2 = center + nalgebra::Vector2::new(end_a.cos() * radius, end_a.sin() * radius);
-                    for p in [p1, p2] {
-                        let d = (p - point).norm();
-                        if d < best_dist {
-                            best_dist = d;
-                            snapped = p;
-                        }
+                    let p2 = center + nalgebra::Vector2::new((start_angle + sweep_angle).cos() * radius, (start_angle + sweep_angle).sin() * radius);
+                    let d1 = (p1 - point).norm();
+                    if d1 < best_dist {
+                        best_dist = d1;
+                        snapped = p1;
+                    }
+                    let d2 = (p2 - point).norm();
+                    if d2 < best_dist {
+                        best_dist = d2;
+                        snapped = p2;
                     }
                 }
-                Entity::Polyline(points) => {
+                GeometryKind::Polyline(points) => {
                     for p in points {
                         let d = (p - point).norm();
                         if d < best_dist {
@@ -154,6 +176,7 @@ impl AppState {
                         }
                     }
                 }
+                _ => {}
             }
         }
 
@@ -177,6 +200,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     }));
     let app_state = Rc::new(RefCell::new(AppState {
         entities: Vec::new(),
+        layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
+        active_layer_index: 0,
         active_tool: Tool::Select,
         click_buffer: Vec::new(),
         selected_indices: Vec::new(),
@@ -201,6 +226,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
 
     let btn_select = Button::with_label("Sel");
+    let btn_point = Button::with_label("Pnt");
     let btn_line = Button::with_label("Line");
     let btn_circle = Button::with_label("Circ");
     let btn_rect = Button::with_label("Rect");
@@ -214,6 +240,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
     toolbar.append(&btn_select);
     toolbar.append(&Separator::new(Orientation::Horizontal));
+    toolbar.append(&btn_point);
     toolbar.append(&btn_line);
     toolbar.append(&btn_circle);
     toolbar.append(&btn_rect);
@@ -286,32 +313,116 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
     sidebar.append(&props_container);
 
+    let layers_container = Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .build();
+    sidebar.append(&Separator::new(Orientation::Horizontal));
+    sidebar.append(&gtk4::Label::new(Some("Layers")));
+    sidebar.append(&layers_container);
+    
+    let btn_add_layer = Button::with_label("Add Layer");
+    sidebar.append(&btn_add_layer);
+
     main_layout.append(&sidebar);
 
-    let update_sidebar = Rc::new({
+    let update_sidebar_weak: Rc<RefCell<Option<Weak<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+
+    let update_sidebar: Rc<dyn Fn()> = Rc::new({
         let app_state = app_state.clone();
         let props_container = props_container.clone();
+        let layers_container = layers_container.clone();
         let viewport = viewport.clone();
+        let update_sidebar_weak = update_sidebar_weak.clone();
         move || {
             while let Some(child) = props_container.first_child() {
                 props_container.remove(&child);
             }
+            while let Some(child) = layers_container.first_child() {
+                layers_container.remove(&child);
+            }
 
-            let app = app_state.borrow();
+            let app_val = app_state.borrow();
+            
+            // Build Layers List
+            for (idx, layer) in app_val.layers.iter().enumerate() {
+                let row = Box::builder()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(6)
+                    .build();
+                
+                let name_label = gtk4::Label::builder()
+                    .label(&layer.name)
+                    .hexpand(true)
+                    .halign(gtk4::Align::Start)
+                    .build();
+                
+                let is_active = idx == app_val.active_layer_index;
+                let active_indicator = gtk4::Image::from_icon_name(if is_active { "emblem-ok-symbolic" } else { "non-existent" });
+                
+                let btn_activate = Button::builder()
+                    .child(&active_indicator)
+                    .tooltip_text("Make Active")
+                    .build();
+                
+                {
+                    let app_state = app_state.clone();
+                    let viewport = viewport.clone();
+                    let weak_cell = update_sidebar_weak.clone();
+                    btn_activate.connect_clicked(move |_| {
+                        {
+                            app_state.borrow_mut().active_layer_index = idx;
+                        }
+                        viewport.queue_draw();
+                        if let Some(weak) = weak_cell.borrow().as_ref() {
+                            if let Some(update) = weak.upgrade() { update(); }
+                        }
+                    });
+                }
+
+                let btn_visible = Button::builder()
+                    .icon_name(if layer.visible { "view-visible-symbolic" } else { "view-conceal-symbolic" })
+                    .build();
+                {
+                    let app_state = app_state.clone();
+                    let viewport = viewport.clone();
+                    let weak_cell = update_sidebar_weak.clone();
+                    btn_visible.connect_clicked(move |_| {
+                        {
+                            let mut app = app_state.borrow_mut();
+                            app.push_undo();
+                            app.layers[idx].visible = !app.layers[idx].visible;
+                        }
+                        viewport.queue_draw();
+                        if let Some(weak) = weak_cell.borrow().as_ref() {
+                            if let Some(update) = weak.upgrade() { update(); }
+                        }
+                    });
+                }
+
+                row.append(&name_label);
+                row.append(&btn_activate);
+                row.append(&btn_visible);
+                layers_container.append(&row);
+            }
+
+            let app = app_val;
             if app.selected_indices.len() == 1 {
                 let index = app.selected_indices[0];
                 let entity = app.entities[index].clone();
                 
-                match entity {
-                    Entity::Point(p) => {
+                match &entity.geometry {
+                    GeometryKind::Point(p) => {
                         props_container.append(&gtk4::Label::new(Some("Type: Point")));
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "X", p.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Point(ref mut p) = app.entities[index] { p.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Point(ref mut p) = app.entities[index].geometry { p.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -319,22 +430,26 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Y", p.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Point(ref mut p) = app.entities[index] { p.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Point(ref mut p) = app.entities[index].geometry { p.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                     }
-                    Entity::Line { start, end } => {
+                    GeometryKind::Line { start, end } => {
                         props_container.append(&gtk4::Label::new(Some("Type: Line")));
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Start X", start.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Line { ref mut start, .. } = app.entities[index] { start.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -342,9 +457,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Start Y", start.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Line { ref mut start, .. } = app.entities[index] { start.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -352,9 +469,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "End X", end.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Line { ref mut end, .. } = app.entities[index] { end.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -362,22 +481,26 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "End Y", end.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Line { ref mut end, .. } = app.entities[index] { end.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                     }
-                    Entity::Circle { center, radius } => {
+                    GeometryKind::Circle { center, radius } => {
                         props_container.append(&gtk4::Label::new(Some("Type: Circle")));
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Center X", center.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Circle { ref mut center, .. } = app.entities[index] { center.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -385,32 +508,38 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Center Y", center.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Circle { ref mut center, .. } = app.entities[index] { center.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
-                            append_f64_prop(&props_container, "Radius", radius, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Circle { ref mut radius, .. } = app.entities[index] { *radius = val.max(0.0); }
+                            append_f64_prop(&props_container, "Radius", *radius, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Circle { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                     }
-                    Entity::Rectangle { start, end } => {
+                    GeometryKind::Rectangle { start, end } => {
                         props_container.append(&gtk4::Label::new(Some("Type: Rectangle")));
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Start X", start.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Rectangle { ref mut start, .. } = app.entities[index] { start.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -418,9 +547,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Start Y", start.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Rectangle { ref mut start, .. } = app.entities[index] { start.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -428,9 +559,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "End X", end.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Rectangle { ref mut end, .. } = app.entities[index] { end.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -438,22 +571,26 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "End Y", end.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Rectangle { ref mut end, .. } = app.entities[index] { end.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                     }
-                    Entity::Arc { center, radius, start_angle, sweep_angle } => {
+                    GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
                         props_container.append(&gtk4::Label::new(Some("Type: Arc")));
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Center X", center.x, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Arc { ref mut center, .. } = app.entities[index] { center.x = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
@@ -461,44 +598,52 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
                             append_f64_prop(&props_container, "Center Y", center.y, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Arc { ref mut center, .. } = app.entities[index] { center.y = val; }
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
-                            append_f64_prop(&props_container, "Radius", radius, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Arc { ref mut radius, .. } = app.entities[index] { *radius = val.max(0.0); }
+                            append_f64_prop(&props_container, "Radius", *radius, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Arc { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
-                            append_f64_prop(&props_container, "Start Angle", start_angle, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Arc { ref mut start_angle, .. } = app.entities[index] { *start_angle = val; }
+                            append_f64_prop(&props_container, "Start Angle", *start_angle, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Arc { ref mut start_angle, .. } = app.entities[index].geometry { *start_angle = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
-                            append_f64_prop(&props_container, "Sweep Angle", sweep_angle, move |val| {
-                                let mut app = app_state.borrow_mut();
-                                app.push_undo();
-                                if let Entity::Arc { ref mut sweep_angle, .. } = app.entities[index] { *sweep_angle = val; }
+                            append_f64_prop(&props_container, "Sweep Angle", *sweep_angle, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Arc { ref mut sweep_angle, .. } = app.entities[index].geometry { *sweep_angle = val; }
+                                }
                                 viewport.queue_draw();
                             });
                         }
                     }
-                    Entity::Polyline(ref points) => {
+                    GeometryKind::Polyline(ref points) => {
                         props_container.append(&gtk4::Label::new(Some(&format!("Type: Polyline ({} pts)", points.len()))));
                     }
                 }
@@ -508,6 +653,21 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 props_container.append(&gtk4::Label::new(Some("Multiple selected")));
             }
         }
+    });
+
+    *update_sidebar_weak.borrow_mut() = Some(Rc::downgrade(&update_sidebar));
+    update_sidebar();
+
+    let app_state_point = app_state.clone();
+    let update_sidebar_point = update_sidebar.clone();
+    btn_point.connect_clicked(move |_| {
+        {
+            let mut state = app_state_point.borrow_mut();
+            state.active_tool = Tool::Point;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_point();
     });
 
     let app_state_select = app_state.clone();
@@ -678,7 +838,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => {
                 if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
                     app.push_undo();
-                    let poly = Entity::Polyline(app.click_buffer.clone());
+                    let layer_name = app.layers[app.active_layer_index].name.clone();
+                    let poly = Entity::new(GeometryKind::Polyline(app.click_buffer.clone()), &layer_name);
                     app.entities.push(poly);
                     app.click_buffer.clear();
                     handled = true;
@@ -697,6 +858,20 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         }
     });
     viewport.add_controller(key_controller);
+
+    let app_state_add_layer = app_state.clone();
+    let viewport_add_layer = viewport.clone();
+    let update_sidebar_add_layer = update_sidebar.clone();
+    btn_add_layer.connect_clicked(move |_| {
+        {
+            let mut app = app_state_add_layer.borrow_mut();
+            app.push_undo();
+            let name = format!("Layer {}", app.layers.len());
+            app.layers.push(Layer::new(&name, [1.0, 1.0, 1.0]));
+        }
+        viewport_add_layer.queue_draw();
+        update_sidebar_add_layer();
+    });
 
     // Motion tracking
     let motion_controller = gtk4::EventControllerMotion::new();
@@ -732,7 +907,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     click_gesture.connect_pressed(move |_gesture, _n_press, x, y| {
         viewport_click.grab_focus();
         {
-            let mut state = app_state_click.borrow_mut();
+            let mut app = app_state_click.borrow_mut();
             let view = view_state_click.borrow();
             
             let world_pos = pixel_to_world(
@@ -741,75 +916,74 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 view.offset, view.zoom
             );
 
-            use wcad_core::domain::Geometry;
             let world_point = Point2::from(world_pos);
-            let snapped = state.snap_point(world_point, view.zoom);
+            let snapped = app.snap_point(world_point, view.zoom);
 
-            match state.active_tool {
+            match app.active_tool {
+                Tool::Point => {
+                    app.push_undo();
+                    let layer_name = app.layers[app.active_layer_index].name.clone();
+                    app.entities.push(Entity::new(GeometryKind::Point(snapped), &layer_name));
+                }
                 Tool::Line => {
-                    state.click_buffer.push(snapped);
-                    if state.click_buffer.len() == 2 {
-                        state.push_undo();
-                        let line = Entity::Line { 
-                            start: state.click_buffer[0], 
-                            end: state.click_buffer[1] 
-                        };
-                        state.entities.push(line);
-                        state.click_buffer.clear();
+                    if app.click_buffer.is_empty() {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let start = app.click_buffer[0];
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Line { start, end: snapped }, &layer_name));
+                        app.click_buffer.clear();
                     }
                 }
                 Tool::Circle => {
-                    state.click_buffer.push(snapped);
-                    if state.click_buffer.len() == 2 {
-                        state.push_undo();
-                        let center = state.click_buffer[0];
-                        let p2 = state.click_buffer[1];
-                        let radius = ((center.x - p2.x).powi(2) + (center.y - p2.y).powi(2)).sqrt();
-                        let circle = Entity::Circle { center, radius };
-                        state.entities.push(circle);
-                        state.click_buffer.clear();
+                    if app.click_buffer.is_empty() {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let center = app.click_buffer[0];
+                        let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Circle { center, radius }, &layer_name));
+                        app.click_buffer.clear();
                     }
                 }
                 Tool::Rectangle => {
-                    state.click_buffer.push(snapped);
-                    if state.click_buffer.len() == 2 {
-                        state.push_undo();
-                        let start = state.click_buffer[0];
-                        let end = state.click_buffer[1];
-                        let rect = Entity::Rectangle { start, end };
-                        state.entities.push(rect);
-                        state.click_buffer.clear();
+                    if app.click_buffer.is_empty() {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let start = app.click_buffer[0];
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Rectangle { start, end: snapped }, &layer_name));
+                        app.click_buffer.clear();
                     }
                 }
                 Tool::Arc => {
-                    state.click_buffer.push(snapped);
-                    if state.click_buffer.len() == 3 {
-                        state.push_undo();
-                        let center = state.click_buffer[0];
-                        let p1 = state.click_buffer[1];
-                        let p2 = state.click_buffer[2];
+                    if app.click_buffer.len() < 2 {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let center = app.click_buffer[0];
+                        let p1 = app.click_buffer[1];
                         let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
                         let start_angle = (p1.y - center.y).atan2(p1.x - center.x);
-                        let end_angle = (p2.y - center.y).atan2(p2.x - center.x);
+                        let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
                         let mut sweep_angle = end_angle - start_angle;
                         if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
-                        let arc = Entity::Arc { center, radius, start_angle, sweep_angle };
-                        state.entities.push(arc);
-                        state.click_buffer.clear();
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, &layer_name));
+                        app.click_buffer.clear();
                     }
                 }
                 Tool::Polyline => {
-                    state.click_buffer.push(snapped);
-                    // For Polyline, we might want a way to finish. 
-                    // For now, let's say every click adds a segment if buffer > 1?
-                    // Actually, let's keep adding to buffer. 
-                    // If the user switches tool, we commit.
+                    app.click_buffer.push(snapped);
                 }
                 Tool::Select => {
                     let mut closest = None;
-                    let mut min_dist = 0.02 / view.zoom as f64; // Adaptive selection threshold
+                    let mut min_dist = 0.02 / view.zoom as f64;
                     
-                    for (i, entity) in state.entities.iter().enumerate() {
+                    for (i, entity) in app.entities.iter().enumerate() {
                         let dist = entity.distance_to(&world_point);
                         if dist < min_dist {
                             min_dist = dist;
@@ -817,9 +991,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     
-                    state.selected_indices.clear();
+                    app.selected_indices.clear();
                     if let Some(index) = closest {
-                        state.selected_indices.push(index);
+                        app.selected_indices.push(index);
                     }
                 }
             }
@@ -838,7 +1012,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let mut app = app_state_rc.borrow_mut();
         if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
             app.push_undo();
-            let poly = Entity::Polyline(app.click_buffer.clone());
+            let layer_name = app.layers[app.active_layer_index].name.clone();
+            let poly = Entity::new(GeometryKind::Polyline(app.click_buffer.clone()), &layer_name);
             app.entities.push(poly);
             app.click_buffer.clear();
         } else {
@@ -932,13 +1107,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             let x_steps = ((end_x - start_x) / grid_size).round() as i32;
             let y_steps = ((end_y - start_y) / grid_size).round() as i32;
             
-            // Only draw if zoom is high enough to see the grid clearly
             if x_steps < 100 && y_steps < 100 {
                 for i in 0..=x_steps {
                     let x = start_x + i as f64 * grid_size;
                     for j in 0..=y_steps {
                         let y = start_y + j as f64 * grid_size;
-                        render_entities.push((Entity::Point(Point2::new(x, y)), [0.2, 0.2, 0.2]));
+                        render_entities.push((Entity::new(GeometryKind::Point(Point2::new(x, y)), "grid"), [0.2, 0.2, 0.2]));
                     }
                 }
             }
@@ -946,10 +1120,13 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
         // Document Entities
         for (i, e) in app.entities.iter().enumerate() {
+            if let Some(layer) = app.layers.iter().find(|l| l.name == e.layer) {
+                if !layer.visible { continue; }
+            }
             let color = if app.selected_indices.contains(&i) {
-                [1.0, 1.0, 0.0] // Yellow for selected
+                [1.0, 1.0, 0.0]
             } else {
-                [1.0, 1.0, 1.0] // White for others
+                app.layers.iter().find(|l| l.name == e.layer).map(|l| l.color).unwrap_or([1.0, 1.0, 1.0])
             };
             render_entities.push((e.clone(), color));
         }
@@ -960,28 +1137,26 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let snapped = app.snap_point(mouse_point, view.zoom);
 
         if app.active_tool != Tool::Select {
-            // Draw a small cross or circle at the snapped position
-            render_entities.push((Entity::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, [0.0, 1.0, 0.0]));
+            render_entities.push((Entity::new(GeometryKind::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, "preview"), [0.0, 1.0, 0.0]));
         }
 
         if !app.click_buffer.is_empty() {
             match app.active_tool {
                 Tool::Line => {
-                    render_entities.push((Entity::Line { start: app.click_buffer[0], end: snapped }, [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [0.5, 0.5, 1.0]));
                 }
                 Tool::Circle => {
                     let center = app.click_buffer[0];
                     let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
-                    render_entities.push((Entity::Circle { center, radius }, [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Circle { center, radius }, "preview"), [0.5, 0.5, 1.0]));
                 }
                 Tool::Rectangle => {
-                    render_entities.push((Entity::Rectangle { start: app.click_buffer[0], end: snapped }, [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Rectangle { start: app.click_buffer[0], end: snapped }, "preview"), [0.5, 0.5, 1.0]));
                 }
                 Tool::Arc => {
                     let center = app.click_buffer[0];
                     if app.click_buffer.len() == 1 {
-                        // Preview radius indicator
-                        render_entities.push((Entity::Line { start: center, end: snapped }, [0.5, 0.5, 1.0]));
+                        render_entities.push((Entity::new(GeometryKind::Line { start: center, end: snapped }, "preview"), [0.5, 0.5, 1.0]));
                     } else if app.click_buffer.len() == 2 {
                         let p1 = app.click_buffer[1];
                         let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
@@ -989,19 +1164,20 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
                         let mut sweep_angle = end_angle - start_angle;
                         if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
-                        render_entities.push((Entity::Arc { center, radius, start_angle, sweep_angle }, [0.5, 0.5, 1.0]));
+                        render_entities.push((Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, "preview"), [0.5, 0.5, 1.0]));
                     }
                 }
                 Tool::Polyline => {
                     let mut pts = app.click_buffer.clone();
                     pts.push(snapped);
-                    render_entities.push((Entity::Polyline(pts), [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Polyline(pts), "preview"), [0.5, 0.5, 1.0]));
                 }
                 _ => {}
             }
         }
 
-        let (vertices, indices) = tessellate_entities(&render_entities);
+        let refs: Vec<(&Entity, [f32; 3])> = render_entities.iter().map(|(e, c)| (e, *c)).collect();
+        let (vertices, indices) = tessellate_entities(&refs);
         let data = renderer.render(width as u32, height as u32, &vertices, &indices);
         
         if data.is_empty() { return; }
@@ -1066,6 +1242,8 @@ mod tests {
     fn test_app_state_undo_redo() {
         let mut state = AppState {
             entities: Vec::new(),
+            layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
+            active_layer_index: 0,
             active_tool: Tool::Select,
             click_buffer: Vec::new(),
             selected_indices: Vec::new(),
@@ -1077,7 +1255,7 @@ mod tests {
 
         // Add an entity
         state.push_undo();
-        state.entities.push(Entity::Point(Point2::new(0.0, 0.0)));
+        state.entities.push(Entity::new(GeometryKind::Point(Point2::new(0.0, 0.0)), "0"));
         assert_eq!(state.entities.len(), 1);
 
         // Undo
@@ -1095,10 +1273,12 @@ mod tests {
     fn test_app_state_delete_selected() {
         let mut state = AppState {
             entities: vec![
-                Entity::Point(Point2::new(0.0, 0.0)),
-                Entity::Point(Point2::new(1.0, 1.0)),
-                Entity::Point(Point2::new(2.0, 2.0)),
+                Entity::new(GeometryKind::Point(Point2::new(0.0, 0.0)), "0"),
+                Entity::new(GeometryKind::Point(Point2::new(1.0, 1.0)), "0"),
+                Entity::new(GeometryKind::Point(Point2::new(2.0, 2.0)), "0"),
             ],
+            layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
+            active_layer_index: 0,
             active_tool: Tool::Select,
             click_buffer: Vec::new(),
             selected_indices: vec![0, 2], // Select first and third
@@ -1111,7 +1291,7 @@ mod tests {
         state.delete_selected();
         assert_eq!(state.entities.len(), 1);
         // The one at index 1 (Point(1,1)) should remain
-        if let Entity::Point(p) = &state.entities[0] {
+        if let GeometryKind::Point(p) = &state.entities[0].geometry {
             assert_eq!(p.x, 1.0);
         } else {
             panic!("Wrong entity remains");
@@ -1126,11 +1306,13 @@ mod tests {
     fn test_app_state_snap_point() {
         let mut state = AppState {
             entities: vec![
-                Entity::Line {
+                Entity::new(GeometryKind::Line {
                     start: Point2::new(0.0, 0.0),
                     end: Point2::new(1.0, 0.0),
-                }
+                }, "0")
             ],
+            layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
+            active_layer_index: 0,
             active_tool: Tool::Select,
             click_buffer: Vec::new(),
             selected_indices: Vec::new(),

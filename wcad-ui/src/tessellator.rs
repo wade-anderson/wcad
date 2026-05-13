@@ -1,20 +1,21 @@
 use lyon::tessellation::*;
 use lyon::path::Path;
 use lyon::math::point;
-use wcad_core::domain::Entity;
+use wcad_core::domain::{Entity, GeometryKind};
 use crate::renderer::Vertex;
 
-pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
+pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
     let mut geometry: VertexBuffers<Vertex, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
     let options = StrokeOptions::default()
         .with_line_width(0.005)
         .with_line_cap(LineCap::Round);
 
-    for (entity, color) in entities {
+    for entity in entities {
+        let (geom, color) = entity;
         let mut builder = Path::builder();
-        match entity {
-            Entity::Point(p) => {
+        match &geom.geometry {
+            GeometryKind::Point(p) => {
                 let size = 0.005f32;
                 builder.begin(point((p.x - size as f64) as f32, p.y as f32));
                 builder.line_to(point((p.x + size as f64) as f32, p.y as f32));
@@ -23,12 +24,12 @@ pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec
                 builder.line_to(point(p.x as f32, (p.y + size as f64) as f32));
                 builder.end(false);
             }
-            Entity::Line { start, end } => {
+            GeometryKind::Line { start, end } => {
                 builder.begin(point(start.x as f32, start.y as f32));
                 builder.line_to(point(end.x as f32, end.y as f32));
                 builder.end(false);
             }
-            Entity::Circle { center, radius } => {
+            GeometryKind::Circle { center, radius } => {
                 let segments = 64;
                 for i in 0..=segments {
                     let angle = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
@@ -42,7 +43,7 @@ pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec
                 }
                 builder.end(true);
             }
-            Entity::Rectangle { start, end } => {
+            GeometryKind::Rectangle { start, end } => {
                 let x1 = start.x as f32;
                 let y1 = start.y as f32;
                 let x2 = end.x as f32;
@@ -53,7 +54,7 @@ pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec
                 builder.line_to(point(x1, y2));
                 builder.end(true);
             }
-            Entity::Arc { center, radius, start_angle, sweep_angle } => {
+            GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
                 let segments = 64;
                 for i in 0..=segments {
                     let t = i as f32 / segments as f32;
@@ -68,7 +69,7 @@ pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec
                 }
                 builder.end(false);
             }
-            Entity::Polyline(points) => {
+            GeometryKind::Polyline(points) => {
                 if !points.is_empty() {
                     builder.begin(point(points[0].x as f32, points[0].y as f32));
                     for p in &points[1..] {
@@ -125,12 +126,11 @@ mod tests {
 
     #[test]
     fn test_tessellate_line() {
-        let entities = vec![
-            (Entity::Line {
-                start: Point2::new(0.0, 0.0),
-                end: Point2::new(1.0, 1.0),
-            }, [1.0, 1.0, 1.0])
-        ];
+        let entity = Entity::new(GeometryKind::Line {
+            start: Point2::new(0.0, 0.0),
+            end: Point2::new(1.0, 1.0),
+        }, "0");
+        let entities = vec![(&entity, [1.0, 1.0, 1.0])];
         let (vertices, indices) = tessellate_entities(&entities);
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());
@@ -141,12 +141,11 @@ mod tests {
 
     #[test]
     fn test_tessellate_circle() {
-        let entities = vec![
-            (Entity::Circle {
-                center: Point2::new(0.0, 0.0),
-                radius: 1.0,
-            }, [1.0, 1.0, 1.0])
-        ];
+        let entity = Entity::new(GeometryKind::Circle {
+            center: Point2::new(0.0, 0.0),
+            radius: 1.0,
+        }, "0");
+        let entities = vec![(&entity, [1.0, 1.0, 1.0])];
         let (vertices, indices) = tessellate_entities(&entities);
         assert!(!vertices.is_empty());
         assert!(!indices.is_empty());

@@ -1804,6 +1804,7 @@ dependencies = [
  "lyon",
  "nalgebra",
  "pollster",
+ "serde",
  "serde_json",
  "wcad-core",
  "wgpu",
