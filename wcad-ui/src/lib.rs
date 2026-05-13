@@ -162,12 +162,18 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_grid = gtk4::ToggleButton::with_label("Grid");
     btn_grid.set_active(true);
 
+    let btn_open = Button::with_label("Open");
+    let btn_save = Button::with_label("Save");
+
     toolbar.append(&btn_select);
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_line);
     toolbar.append(&btn_circle);
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_grid);
+    toolbar.append(&Separator::new(Orientation::Horizontal));
+    toolbar.append(&btn_open);
+    toolbar.append(&btn_save);
 
     let app_state_select = app_state.clone();
     btn_select.connect_clicked(move |_| {
@@ -202,6 +208,54 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             let vp: &DrawingArea = vp;
             vp.queue_draw();
         }
+    });
+
+    let app_state_open = app_state.clone();
+    let viewport_open_ref = viewport_grid_ref.clone();
+    btn_open.connect_clicked(move |_| {
+        let state = app_state_open.clone();
+        let viewport_ref = viewport_open_ref.clone();
+        let dialog = gtk4::FileDialog::builder()
+            .title("Open WCAD File")
+            .build();
+        
+        dialog.open(None::<&ApplicationWindow>, None::<&gtk4::gio::Cancellable>, move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if let Ok(entities) = serde_json::from_str::<Vec<Entity>>(&content) {
+                            let mut app = state.borrow_mut();
+                            app.push_undo();
+                            app.entities = entities;
+                            app.selected_indices.clear();
+                            if let Some(vp) = viewport_ref.borrow().as_ref() {
+                                vp.queue_draw();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+
+    let app_state_save = app_state.clone();
+    btn_save.connect_clicked(move |_| {
+        let state = app_state_save.clone();
+        let dialog = gtk4::FileDialog::builder()
+            .title("Save WCAD File")
+            .initial_name("drawing.json")
+            .build();
+        
+        dialog.save(None::<&ApplicationWindow>, None::<&gtk4::gio::Cancellable>, move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    let entities = state.borrow().entities.clone();
+                    if let Ok(content) = serde_json::to_string_pretty(&entities) {
+                        let _ = std::fs::write(path, content);
+                    }
+                }
+            }
+        });
     });
 
     main_layout.append(&toolbar);

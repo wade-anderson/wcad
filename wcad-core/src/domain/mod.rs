@@ -120,4 +120,30 @@ mod tests {
         // Point inside
         assert!((entity.distance_to(&Point2::new(0.0, 0.0)) - 5.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_entity_serialization() {
+        let entities = vec![
+            Entity::Point(Point2::new(1.0, 2.0)),
+            Entity::Line { 
+                start: Point2::new(0.0, 0.0), 
+                end: Point2::new(10.0, 10.0) 
+            },
+            Entity::Circle { 
+                center: Point2::new(5.0, 5.0), 
+                radius: 2.5 
+            },
+        ];
+
+        let json = serde_json::to_string(&entities).unwrap();
+        let decoded: Vec<Entity> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(entities.len(), decoded.len());
+        
+        if let Entity::Circle { radius, .. } = &decoded[2] {
+            assert_eq!(radius, &2.5);
+        } else {
+            panic!("De-serialization failed for Circle");
+        }
+    }
 }
