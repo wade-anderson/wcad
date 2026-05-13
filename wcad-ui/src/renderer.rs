@@ -164,7 +164,7 @@ impl Renderer {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(matrix_ref));
     }
 
-    pub fn render(&mut self, width: u32, height: u32, vertices: &[Vertex]) -> Vec<u8> {
+    pub fn render(&mut self, width: u32, height: u32, vertices: &[Vertex], indices: &[u32]) -> Vec<u8> {
         if width == 0 || height == 0 {
             return Vec::new();
         }
@@ -211,6 +211,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         {
@@ -232,7 +238,8 @@ impl Renderer {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.draw(0..vertices.len() as u32, 0..1);
+            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
         }
 
         let u32_size = std::mem::size_of::<u32>() as u32;

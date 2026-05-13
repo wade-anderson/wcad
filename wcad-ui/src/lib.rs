@@ -1,11 +1,14 @@
 pub mod renderer;
+pub mod tessellator;
 
 use libadwaita::prelude::*;
 use libadwaita::{Application, ApplicationWindow, HeaderBar};
 use gtk4::{Box, Orientation, DrawingArea};
 use std::rc::Rc;
 use std::cell::RefCell;
-use renderer::{Renderer, Vertex};
+use renderer::Renderer;
+use wcad_core::domain::Entity;
+use tessellator::tessellate_entities;
 
 pub struct ViewState {
     pub offset: [f32; 2],
@@ -119,13 +122,25 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         
         renderer.update_view(state.offset, state.zoom, width as f32, height as f32);
 
-        let vertices = [
-            Vertex { position: [0.0, 0.5], color: [1.0, 0.0, 0.0] },
-            Vertex { position: [-0.5, -0.5], color: [0.0, 1.0, 0.0] },
-            Vertex { position: [0.5, -0.5], color: [0.0, 0.0, 1.0] },
+        // Sample entities for demonstration
+        let entities = vec![
+            Entity::Line { 
+                start: nalgebra::Point2::new(-0.5, -0.5), 
+                end: nalgebra::Point2::new(0.5, 0.5) 
+            },
+            Entity::Line { 
+                start: nalgebra::Point2::new(-0.5, 0.5), 
+                end: nalgebra::Point2::new(0.5, -0.5) 
+            },
+            Entity::Circle { 
+                center: nalgebra::Point2::new(0.0, 0.0), 
+                radius: 0.3 
+            },
+            Entity::Point(nalgebra::Point2::new(0.0, 0.0)),
         ];
 
-        let data = renderer.render(width as u32, height as u32, &vertices);
+        let (vertices, indices) = tessellate_entities(&entities);
+        let data = renderer.render(width as u32, height as u32, &vertices, &indices);
         
         if data.is_empty() {
             return;
