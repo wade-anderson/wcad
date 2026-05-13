@@ -49,6 +49,7 @@ pub struct AppState {
     pub redo_stack: Vec<UndoState>,
     pub grid_size: f64,
     pub grid_enabled: bool,
+    pub grid_factor: f64,
     pub mouse_world_pos: Point2<f64>,
 }
 
@@ -186,8 +187,14 @@ impl AppState {
 
         // Snap to grid if enabled and no endpoint found
         if self.grid_enabled && best_dist >= 0.02 / zoom as f64 {
-            let x = (point.x / self.grid_size).round() * self.grid_size;
-            let y = (point.y / self.grid_size).round() * self.grid_size;
+            let multiplier = if self.grid_factor >= 0.0 {
+                1.0 + self.grid_factor
+            } else {
+                1.0 / (1.0 - self.grid_factor)
+            };
+            let grid_size = self.grid_size / multiplier;
+            let x = (point.x / grid_size).round() * grid_size;
+            let y = (point.y / grid_size).round() * grid_size;
             snapped = Point2::new(x, y);
         }
 
@@ -213,6 +220,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         redo_stack: Vec::new(),
         grid_size: 0.1,
         grid_enabled: true,
+        grid_factor: 0.0,
         mouse_world_pos: Point2::new(0.0, 0.0),
     }));
 
@@ -281,6 +289,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     toolbar.append(&btn_dim_rad);
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_grid);
+    
+    let grid_adj = gtk4::Adjustment::new(0.0, -10.0, 10.0, 1.0, 2.0, 0.0);
+    let spin_grid = gtk4::SpinButton::builder()
+        .adjustment(&grid_adj)
+        .digits(0)
+        .tooltip_text("Grid Factor (-10x to +10x)")
+        .build();
+    toolbar.append(&gtk4::Label::new(Some("Grid Factor")));
+    toolbar.append(&spin_grid);
 
     main_layout.append(&toolbar);
 
@@ -311,6 +328,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .can_focus(true)
         .focusable(true)
         .build();
+
+    {
+        let app_state = app_state.clone();
+        let viewport = viewport.clone();
+        spin_grid.connect_value_changed(move |spin| {
+            app_state.borrow_mut().grid_factor = spin.value();
+            viewport.queue_draw();
+        });
+    }
     let viewport_grid_ref = Rc::new(RefCell::new(Some(viewport.clone())));
 
     let viewport_frame = gtk4::Frame::builder()
@@ -1356,7 +1382,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
         // Background Grid
         if app.grid_enabled {
-            let grid_size = app.grid_size;
+            let base_grid_size = app.grid_size;
+            let factor = app.grid_factor;
+            let multiplier = if factor >= 0.0 {
+                1.0 + factor
+            } else {
+                1.0 / (1.0 - factor)
+            };
+            let grid_size = base_grid_size / multiplier;
+            
             let w = width as f32;
             let h = height as f32;
             let min_world = pixel_to_world(0.0, h, w, h, view.offset, view.zoom);
@@ -1591,7 +1625,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Add an entity
@@ -1626,7 +1660,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         state.delete_selected();
@@ -1660,7 +1694,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Snap to endpoint (0,0) - within 0.02 threshold
