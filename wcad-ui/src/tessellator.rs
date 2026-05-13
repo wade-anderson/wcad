@@ -4,12 +4,12 @@ use lyon::math::point;
 use wcad_core::domain::Entity;
 use crate::renderer::Vertex;
 
-pub fn tessellate_entities(entities: &[Entity]) -> (Vec<Vertex>, Vec<u32>) {
+pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
     let mut geometry: VertexBuffers<Vertex, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
     let options = StrokeOptions::default().with_line_width(0.005);
 
-    for entity in entities {
+    for (entity, color) in entities {
         let mut builder = Path::builder();
         match entity {
             Entity::Point(p) => {
@@ -48,6 +48,7 @@ pub fn tessellate_entities(entities: &[Entity]) -> (Vec<Vertex>, Vec<u32>) {
             &options,
             &mut Builder {
                 output: &mut geometry,
+                color: *color,
             },
         ).unwrap();
     }
@@ -57,6 +58,7 @@ pub fn tessellate_entities(entities: &[Entity]) -> (Vec<Vertex>, Vec<u32>) {
 
 struct Builder<'a> {
     output: &'a mut VertexBuffers<Vertex, u32>,
+    color: [f32; 3],
 }
 
 impl<'a> StrokeGeometryBuilder for Builder<'a> {
@@ -65,7 +67,7 @@ impl<'a> StrokeGeometryBuilder for Builder<'a> {
         let id = self.output.vertices.len() as u32;
         self.output.vertices.push(Vertex {
             position: [pos.x, pos.y],
-            color: [1.0, 1.0, 1.0],
+            color: self.color,
         });
         Ok(VertexId(id))
     }
@@ -87,10 +89,10 @@ mod tests {
     #[test]
     fn test_tessellate_line() {
         let entities = vec![
-            Entity::Line {
+            (Entity::Line {
                 start: Point2::new(0.0, 0.0),
                 end: Point2::new(1.0, 1.0),
-            }
+            }, [1.0, 1.0, 1.0])
         ];
         let (vertices, indices) = tessellate_entities(&entities);
         assert!(!vertices.is_empty());
@@ -103,10 +105,10 @@ mod tests {
     #[test]
     fn test_tessellate_circle() {
         let entities = vec![
-            Entity::Circle {
+            (Entity::Circle {
                 center: Point2::new(0.0, 0.0),
                 radius: 1.0,
-            }
+            }, [1.0, 1.0, 1.0])
         ];
         let (vertices, indices) = tessellate_entities(&entities);
         assert!(!vertices.is_empty());

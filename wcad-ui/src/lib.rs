@@ -3,12 +3,20 @@ pub mod tessellator;
 
 use libadwaita::prelude::*;
 use libadwaita::{Application, ApplicationWindow, HeaderBar};
-use gtk4::{Box, Orientation, DrawingArea};
+use gtk4::{Box, Orientation, DrawingArea, Button, Separator};
 use std::rc::Rc;
 use std::cell::RefCell;
 use renderer::Renderer;
 use wcad_core::domain::Entity;
 use tessellator::tessellate_entities;
+use nalgebra::Point2;
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Tool {
+    Select,
+    Line,
+    Circle,
+}
 
 pub struct ViewState {
     pub offset: [f32; 2],
@@ -16,24 +24,82 @@ pub struct ViewState {
     pub cursor_pos: [f32; 2],
 }
 
+pub struct AppState {
+    pub entities: Vec<Entity>,
+    pub active_tool: Tool,
+    pub click_buffer: Vec<Point2<f64>>,
+}
+
 pub fn build_ui(app: &Application) -> ApplicationWindow {
-    // Initialize Wgpu Renderer synchronously for the demo
     let renderer = Rc::new(RefCell::new(pollster::block_on(Renderer::new())));
     let view_state = Rc::new(RefCell::new(ViewState {
         offset: [0.0, 0.0],
         zoom: 1.0,
         cursor_pos: [0.0, 0.0],
     }));
+    let app_state = Rc::new(RefCell::new(AppState {
+        entities: Vec::new(),
+        active_tool: Tool::Select,
+        click_buffer: Vec::new(),
+    }));
 
-    let content = Box::builder()
+    let main_layout = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .build();
+
+    // Toolbar
+    let toolbar = Box::builder()
         .orientation(Orientation::Vertical)
+        .spacing(6)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+
+    let btn_select = Button::with_label("Sel");
+    let btn_line = Button::with_label("Line");
+    let btn_circle = Button::with_label("Circ");
+
+    toolbar.append(&btn_select);
+    toolbar.append(&Separator::new(Orientation::Horizontal));
+    toolbar.append(&btn_line);
+    toolbar.append(&btn_circle);
+
+    let app_state_select = app_state.clone();
+    btn_select.connect_clicked(move |_| {
+        let mut state = app_state_select.borrow_mut();
+        state.active_tool = Tool::Select;
+        state.click_buffer.clear();
+    });
+
+    let app_state_line = app_state.clone();
+    btn_line.connect_clicked(move |_| {
+        let mut state = app_state_line.borrow_mut();
+        state.active_tool = Tool::Line;
+        state.click_buffer.clear();
+    });
+
+    let app_state_circle = app_state.clone();
+    btn_circle.connect_clicked(move |_| {
+        let mut state = app_state_circle.borrow_mut();
+        state.active_tool = Tool::Circle;
+        state.click_buffer.clear();
+    });
+
+    main_layout.append(&toolbar);
+
+    let viewport_container = Box::builder()
+        .orientation(Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
         .build();
 
     let header = HeaderBar::builder()
         .title_widget(&libadwaita::WindowTitle::new("WCAD", "2D Drafting for Linux"))
         .build();
 
-    content.append(&header);
+    viewport_container.append(&header);
 
     let viewport = DrawingArea::builder()
         .hexpand(true)
@@ -41,13 +107,64 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .can_focus(true)
         .build();
 
-    // Motion tracking (for zoom origin)
+    viewport_container.append(&viewport);
+    main_layout.append(&viewport_container);
+
+    // Motion tracking
     let motion_controller = gtk4::EventControllerMotion::new();
     let view_state_motion = view_state.clone();
+    let viewport_motion = viewport.clone();
     motion_controller.connect_motion(move |_controller, x, y| {
         view_state_motion.borrow_mut().cursor_pos = [x as f32, y as f32];
+        viewport_motion.queue_draw();
     });
     viewport.add_controller(motion_controller);
+
+    // Left Click Interaction (Tool Usage)
+    let click_gesture = gtk4::GestureClick::new();
+    let app_state_click = app_state.clone();
+    let view_state_click = view_state.clone();
+    let viewport_click = viewport.clone();
+    click_gesture.connect_pressed(move |_gesture, _n_press, x, y| {
+        let mut state = app_state_click.borrow_mut();
+        let view = view_state_click.borrow();
+        
+        let world_pos = pixel_to_world(
+            x as f32, y as f32, 
+            viewport_click.width() as f32, viewport_click.height() as f32, 
+            view.offset, view.zoom
+        );
+
+        match state.active_tool {
+            Tool::Line => {
+                state.click_buffer.push(Point2::from(world_pos));
+                if state.click_buffer.len() == 2 {
+                    let line = Entity::Line { 
+                        start: state.click_buffer[0], 
+                        end: state.click_buffer[1] 
+                    };
+                    state.entities.push(line);
+                    state.click_buffer.clear();
+                }
+            }
+            Tool::Circle => {
+                state.click_buffer.push(Point2::from(world_pos));
+                if state.click_buffer.len() == 2 {
+                    let center = state.click_buffer[0];
+                    let p2 = state.click_buffer[1];
+                    let radius = ((center.x - p2.x).powi(2) + (center.y - p2.y).powi(2)).sqrt();
+                    let circle = Entity::Circle { center, radius };
+                    state.entities.push(circle);
+                    state.click_buffer.clear();
+                }
+            }
+            Tool::Select => {
+                // Future selection logic
+            }
+        }
+        viewport_click.queue_draw();
+    });
+    viewport.add_controller(click_gesture);
 
     // Zoom handling (Scroll)
     let scroll_controller = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
@@ -65,28 +182,22 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         }
 
         let new_zoom = state.zoom;
-
-        // Zoom towards cursor logic
         let w = viewport_scroll.width() as f32;
         let h = viewport_scroll.height() as f32;
-        let aspect = w / h;
+        
+        let world_cursor = pixel_to_world(state.cursor_pos[0], state.cursor_pos[1], w, h, state.offset, old_zoom);
 
-        // Convert cursor pixels to "world" coordinates (relative to center)
-        let cx = (state.cursor_pos[0] - w / 2.0) * (aspect / (w / 2.0)) / old_zoom + state.offset[0];
-        let cy = -(state.cursor_pos[1] - h / 2.0) * (1.0 / (h / 2.0)) / old_zoom + state.offset[1];
-
-        // Adjust offset to keep cx, cy under the cursor
-        state.offset[0] = cx - (cx - state.offset[0]) * (old_zoom / new_zoom);
-        state.offset[1] = cy - (cy - state.offset[1]) * (old_zoom / new_zoom);
+        state.offset[0] = world_cursor[0] as f32 - (world_cursor[0] as f32 - state.offset[0]) * (old_zoom / new_zoom);
+        state.offset[1] = world_cursor[1] as f32 - (world_cursor[1] as f32 - state.offset[1]) * (old_zoom / new_zoom);
 
         viewport_scroll.queue_draw();
         gtk4::glib::Propagation::Proceed
     });
     viewport.add_controller(scroll_controller);
 
-    // Pan handling (Middle Mouse Drag)
+    // Pan handling
     let drag_gesture = gtk4::GestureDrag::new();
-    drag_gesture.set_button(2); // Middle mouse button
+    drag_gesture.set_button(2); 
     let view_state_drag = view_state.clone();
     let viewport_drag = viewport.clone();
     let start_offset = Rc::new(RefCell::new([0.0f32; 2]));
@@ -103,76 +214,103 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     drag_gesture.connect_drag_update(move |_gesture, offset_x, offset_y| {
         let mut state = view_state_update.borrow_mut();
         let start = start_offset_update.borrow();
-        
-        // Convert pixel drag to world coordinates
         let scale = 2.0 / (viewport_update.height() as f32 * state.zoom);
         state.offset[0] = start[0] - (offset_x as f32 * scale);
         state.offset[1] = start[1] + (offset_y as f32 * scale);
-        
         viewport_update.queue_draw();
     });
     viewport.add_controller(drag_gesture);
 
-    // Set up the drawing function
+    // Drawing
     let renderer_draw = renderer.clone();
     let view_state_draw = view_state.clone();
+    let app_state_draw = app_state.clone();
     viewport.set_draw_func(move |_area, cr, width, height| {
-        let state = view_state_draw.borrow();
+        let view = view_state_draw.borrow();
+        let app = app_state_draw.borrow();
         let mut renderer = renderer_draw.borrow_mut();
         
-        renderer.update_view(state.offset, state.zoom, width as f32, height as f32);
+        renderer.update_view(view.offset, view.zoom, width as f32, height as f32);
 
-        // Sample entities for demonstration
-        let entities = vec![
-            Entity::Line { 
-                start: nalgebra::Point2::new(-0.5, -0.5), 
-                end: nalgebra::Point2::new(0.5, 0.5) 
-            },
-            Entity::Line { 
-                start: nalgebra::Point2::new(-0.5, 0.5), 
-                end: nalgebra::Point2::new(0.5, -0.5) 
-            },
-            Entity::Circle { 
-                center: nalgebra::Point2::new(0.0, 0.0), 
-                radius: 0.3 
-            },
-            Entity::Point(nalgebra::Point2::new(0.0, 0.0)),
-        ];
+        let mut render_entities: Vec<(Entity, [f32; 3])> = app.entities.iter()
+            .map(|e| (e.clone(), [1.0, 1.0, 1.0])).collect();
 
-        let (vertices, indices) = tessellate_entities(&entities);
+        // Rubber-banding preview
+        if !app.click_buffer.is_empty() {
+            let mouse_world = pixel_to_world(view.cursor_pos[0], view.cursor_pos[1], width as f32, height as f32, view.offset, view.zoom);
+            let mouse_point = Point2::from(mouse_world);
+            
+            match app.active_tool {
+                Tool::Line => {
+                    render_entities.push((Entity::Line { start: app.click_buffer[0], end: mouse_point }, [0.5, 0.5, 1.0]));
+                }
+                Tool::Circle => {
+                    let center = app.click_buffer[0];
+                    let radius = ((center.x - mouse_point.x).powi(2) + (center.y - mouse_point.y).powi(2)).sqrt();
+                    render_entities.push((Entity::Circle { center, radius }, [0.5, 0.5, 1.0]));
+                }
+                _ => {}
+            }
+        }
+
+        let (vertices, indices) = tessellate_entities(&render_entities);
         let data = renderer.render(width as u32, height as u32, &vertices, &indices);
         
-        if data.is_empty() {
-            return;
-        }
+        if data.is_empty() { return; }
 
-        // Create a Cairo ImageSurface from the Wgpu data
-        let mut surface = gtk4::cairo::ImageSurface::create(
-            gtk4::cairo::Format::ARgb32,
-            width,
-            height,
-        ).expect("Failed to create surface");
-
+        let mut surface = gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, width, height).unwrap();
         {
-            let mut surface_data = surface.data().expect("Failed to get surface data");
+            let mut surface_data = surface.data().unwrap();
             surface_data.copy_from_slice(&data);
         }
-
-        // Draw the surface using Cairo
-        cr.set_source_surface(&surface, 0.0, 0.0).expect("Failed to set source surface");
-        cr.paint().expect("Failed to paint surface");
+        cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
+        cr.paint().unwrap();
     });
-
-    content.append(&viewport);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .default_width(1200)
         .default_height(800)
         .title("WCAD")
-        .content(&content)
+        .content(&main_layout)
         .build();
 
     window.present();
     window
+}
+
+fn pixel_to_world(x: f32, y: f32, width: f32, height: f32, offset: [f32; 2], zoom: f32) -> [f64; 2] {
+    let aspect = width / height;
+    let wx = (x - width / 2.0) * (aspect / (width / 2.0)) / zoom + offset[0];
+    let wy = -(y - height / 2.0) * (1.0 / (height / 2.0)) / zoom + offset[1];
+    [wx as f64, wy as f64]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pixel_to_world_center() {
+        // Center of a 100x100 screen should be (0,0) world at offset 0
+        let world = pixel_to_world(50.0, 50.0, 100.0, 100.0, [0.0, 0.0], 1.0);
+        assert!((world[0] - 0.0).abs() < 1e-6);
+        assert!((world[1] - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pixel_to_world_offset() {
+        // Center of screen with offset [10, 10] should be (10, 10) world
+        let world = pixel_to_world(50.0, 50.0, 100.0, 100.0, [10.0, 10.0], 1.0);
+        assert!((world[0] - 10.0).abs() < 1e-6);
+        assert!((world[1] - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pixel_to_world_zoom() {
+        // At zoom 2.0, clicking 25px right of center (in 100x100) should be 0.25 units in world
+        // (Since total width at zoom 1.0 is 2.0 units for 1:1 aspect)
+        let world = pixel_to_world(75.0, 50.0, 100.0, 100.0, [0.0, 0.0], 2.0);
+        assert!((world[0] - 0.25).abs() < 1e-6);
+    }
 }
