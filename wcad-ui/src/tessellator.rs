@@ -7,7 +7,9 @@ use crate::renderer::Vertex;
 pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
     let mut geometry: VertexBuffers<Vertex, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
-    let options = StrokeOptions::default().with_line_width(0.005);
+    let options = StrokeOptions::default()
+        .with_line_width(0.005)
+        .with_line_cap(LineCap::Round);
 
     for (entity, color) in entities {
         let mut builder = Path::builder();
@@ -39,6 +41,41 @@ pub fn tessellate_entities(entities: &[(Entity, [f32; 3])]) -> (Vec<Vertex>, Vec
                     }
                 }
                 builder.end(true);
+            }
+            Entity::Rectangle { start, end } => {
+                let x1 = start.x as f32;
+                let y1 = start.y as f32;
+                let x2 = end.x as f32;
+                let y2 = end.y as f32;
+                builder.begin(point(x1, y1));
+                builder.line_to(point(x2, y1));
+                builder.line_to(point(x2, y2));
+                builder.line_to(point(x1, y2));
+                builder.end(true);
+            }
+            Entity::Arc { center, radius, start_angle, sweep_angle } => {
+                let segments = 64;
+                for i in 0..=segments {
+                    let t = i as f32 / segments as f32;
+                    let angle = *start_angle as f32 + t * *sweep_angle as f32;
+                    let x = center.x as f32 + *radius as f32 * angle.cos();
+                    let y = center.y as f32 + *radius as f32 * angle.sin();
+                    if i == 0 {
+                        builder.begin(point(x, y));
+                    } else {
+                        builder.line_to(point(x, y));
+                    }
+                }
+                builder.end(false);
+            }
+            Entity::Polyline(points) => {
+                if !points.is_empty() {
+                    builder.begin(point(points[0].x as f32, points[0].y as f32));
+                    for p in &points[1..] {
+                        builder.line_to(point(p.x as f32, p.y as f32));
+                    }
+                    builder.end(false);
+                }
             }
         }
         

@@ -16,6 +16,9 @@ pub enum Tool {
     Select,
     Line,
     Circle,
+    Rectangle,
+    Arc,
+    Polyline,
 }
 
 pub struct ViewState {
@@ -110,6 +113,47 @@ impl AppState {
                         snapped = *p;
                     }
                 }
+                Entity::Rectangle { start, end } => {
+                    let corners = [
+                        *start,
+                        Point2::new(end.x, start.y),
+                        *end,
+                        Point2::new(start.x, end.y),
+                    ];
+                    for c in corners {
+                        let d = (c - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = c;
+                        }
+                    }
+                }
+                Entity::Arc { center, radius, start_angle, sweep_angle } => {
+                    let d = (center - point).norm();
+                    if d < best_dist {
+                        best_dist = d;
+                        snapped = *center;
+                    }
+                    let p1 = center + nalgebra::Vector2::new(start_angle.cos() * radius, start_angle.sin() * radius);
+                    let end_a = start_angle + sweep_angle;
+                    let p2 = center + nalgebra::Vector2::new(end_a.cos() * radius, end_a.sin() * radius);
+                    for p in [p1, p2] {
+                        let d = (p - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = p;
+                        }
+                    }
+                }
+                Entity::Polyline(points) => {
+                    for p in points {
+                        let d = (p - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = *p;
+                        }
+                    }
+                }
             }
         }
 
@@ -159,6 +203,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_select = Button::with_label("Sel");
     let btn_line = Button::with_label("Line");
     let btn_circle = Button::with_label("Circ");
+    let btn_rect = Button::with_label("Rect");
+    let btn_arc = Button::with_label("Arc");
+    let btn_poly = Button::with_label("Poly");
     let btn_grid = gtk4::ToggleButton::with_label("Grid");
     btn_grid.set_active(true);
 
@@ -169,6 +216,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_line);
     toolbar.append(&btn_circle);
+    toolbar.append(&btn_rect);
+    toolbar.append(&btn_arc);
+    toolbar.append(&btn_poly);
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_grid);
     toolbar.append(&Separator::new(Orientation::Horizontal));
@@ -352,6 +402,105 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             });
                         }
                     }
+                    Entity::Rectangle { start, end } => {
+                        props_container.append(&gtk4::Label::new(Some("Type: Rectangle")));
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Start X", start.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Rectangle { ref mut start, .. } = app.entities[index] { start.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Start Y", start.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Rectangle { ref mut start, .. } = app.entities[index] { start.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "End X", end.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Rectangle { ref mut end, .. } = app.entities[index] { end.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "End Y", end.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Rectangle { ref mut end, .. } = app.entities[index] { end.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                    }
+                    Entity::Arc { center, radius, start_angle, sweep_angle } => {
+                        props_container.append(&gtk4::Label::new(Some("Type: Arc")));
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Center X", center.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Arc { ref mut center, .. } = app.entities[index] { center.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Center Y", center.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Arc { ref mut center, .. } = app.entities[index] { center.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Radius", radius, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Arc { ref mut radius, .. } = app.entities[index] { *radius = val.max(0.0); }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Start Angle", start_angle, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Arc { ref mut start_angle, .. } = app.entities[index] { *start_angle = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Sweep Angle", sweep_angle, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Arc { ref mut sweep_angle, .. } = app.entities[index] { *sweep_angle = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                    }
+                    Entity::Polyline(ref points) => {
+                        props_container.append(&gtk4::Label::new(Some(&format!("Type: Polyline ({} pts)", points.len()))));
+                    }
                 }
             } else if app.selected_indices.is_empty() {
                 props_container.append(&gtk4::Label::new(Some("No selection")));
@@ -394,6 +543,42 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             state.selected_indices.clear();
         }
         update_sidebar_circle();
+    });
+
+    let app_state_rect = app_state.clone();
+    let update_sidebar_rect = update_sidebar.clone();
+    btn_rect.connect_clicked(move |_| {
+        {
+            let mut state = app_state_rect.borrow_mut();
+            state.active_tool = Tool::Rectangle;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_rect();
+    });
+
+    let app_state_arc = app_state.clone();
+    let update_sidebar_arc = update_sidebar.clone();
+    btn_arc.connect_clicked(move |_| {
+        {
+            let mut state = app_state_arc.borrow_mut();
+            state.active_tool = Tool::Arc;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_arc();
+    });
+
+    let app_state_poly = app_state.clone();
+    let update_sidebar_poly = update_sidebar.clone();
+    btn_poly.connect_clicked(move |_| {
+        {
+            let mut state = app_state_poly.borrow_mut();
+            state.active_tool = Tool::Polyline;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_poly();
     });
 
     let app_state_grid = app_state.clone();
@@ -486,6 +671,19 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 app.grid_enabled = !app.grid_enabled;
                 handled = true;
             }
+            gtk4::gdk::Key::Escape => {
+                app.click_buffer.clear();
+                handled = true;
+            }
+            gtk4::gdk::Key::Return | gtk4::gdk::Key::KP_Enter => {
+                if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
+                    app.push_undo();
+                    let poly = Entity::Polyline(app.click_buffer.clone());
+                    app.entities.push(poly);
+                    app.click_buffer.clear();
+                    handled = true;
+                }
+            }
             _ => {}
         }
 
@@ -572,6 +770,41 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         state.click_buffer.clear();
                     }
                 }
+                Tool::Rectangle => {
+                    state.click_buffer.push(snapped);
+                    if state.click_buffer.len() == 2 {
+                        state.push_undo();
+                        let start = state.click_buffer[0];
+                        let end = state.click_buffer[1];
+                        let rect = Entity::Rectangle { start, end };
+                        state.entities.push(rect);
+                        state.click_buffer.clear();
+                    }
+                }
+                Tool::Arc => {
+                    state.click_buffer.push(snapped);
+                    if state.click_buffer.len() == 3 {
+                        state.push_undo();
+                        let center = state.click_buffer[0];
+                        let p1 = state.click_buffer[1];
+                        let p2 = state.click_buffer[2];
+                        let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
+                        let start_angle = (p1.y - center.y).atan2(p1.x - center.x);
+                        let end_angle = (p2.y - center.y).atan2(p2.x - center.x);
+                        let mut sweep_angle = end_angle - start_angle;
+                        if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
+                        let arc = Entity::Arc { center, radius, start_angle, sweep_angle };
+                        state.entities.push(arc);
+                        state.click_buffer.clear();
+                    }
+                }
+                Tool::Polyline => {
+                    state.click_buffer.push(snapped);
+                    // For Polyline, we might want a way to finish. 
+                    // For now, let's say every click adds a segment if buffer > 1?
+                    // Actually, let's keep adding to buffer. 
+                    // If the user switches tool, we commit.
+                }
                 Tool::Select => {
                     let mut closest = None;
                     let mut min_dist = 0.02 / view.zoom as f64; // Adaptive selection threshold
@@ -595,6 +828,25 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         viewport_click.queue_draw();
     });
     viewport.add_controller(click_gesture);
+    
+    // Right Click Interaction (Finish/Cancel)
+    let right_click = gtk4::GestureClick::new();
+    right_click.set_button(3);
+    let app_state_rc = app_state.clone();
+    let viewport_rc = viewport.clone();
+    right_click.connect_pressed(move |_gesture, _n, _x, _y| {
+        let mut app = app_state_rc.borrow_mut();
+        if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
+            app.push_undo();
+            let poly = Entity::Polyline(app.click_buffer.clone());
+            app.entities.push(poly);
+            app.click_buffer.clear();
+        } else {
+            app.click_buffer.clear();
+        }
+        viewport_rc.queue_draw();
+    });
+    viewport.add_controller(right_click);
 
     // Zoom handling (Scroll)
     let scroll_controller = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
@@ -721,6 +973,29 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                     let center = app.click_buffer[0];
                     let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
                     render_entities.push((Entity::Circle { center, radius }, [0.5, 0.5, 1.0]));
+                }
+                Tool::Rectangle => {
+                    render_entities.push((Entity::Rectangle { start: app.click_buffer[0], end: snapped }, [0.5, 0.5, 1.0]));
+                }
+                Tool::Arc => {
+                    let center = app.click_buffer[0];
+                    if app.click_buffer.len() == 1 {
+                        // Preview radius indicator
+                        render_entities.push((Entity::Line { start: center, end: snapped }, [0.5, 0.5, 1.0]));
+                    } else if app.click_buffer.len() == 2 {
+                        let p1 = app.click_buffer[1];
+                        let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
+                        let start_angle = (p1.y - center.y).atan2(p1.x - center.x);
+                        let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
+                        let mut sweep_angle = end_angle - start_angle;
+                        if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
+                        render_entities.push((Entity::Arc { center, radius, start_angle, sweep_angle }, [0.5, 0.5, 1.0]));
+                    }
+                }
+                Tool::Polyline => {
+                    let mut pts = app.click_buffer.clone();
+                    pts.push(snapped);
+                    render_entities.push((Entity::Polyline(pts), [0.5, 0.5, 1.0]));
                 }
                 _ => {}
             }
