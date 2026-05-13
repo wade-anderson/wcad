@@ -31,6 +31,8 @@ pub struct AppState {
     pub selected_indices: Vec<usize>,
     pub undo_stack: Vec<Vec<Entity>>,
     pub redo_stack: Vec<Vec<Entity>>,
+    pub grid_size: f64,
+    pub grid_enabled: bool,
 }
 
 impl AppState {
@@ -74,6 +76,52 @@ impl AppState {
         }
         self.selected_indices.clear();
     }
+
+    pub fn snap_point(&self, point: Point2<f64>, zoom: f32) -> Point2<f64> {
+        let mut snapped = point;
+        let mut best_dist = 0.02 / zoom as f64; // Snap threshold
+
+        // Snap to endpoints
+        for entity in &self.entities {
+            match entity {
+                Entity::Line { start, end } => {
+                    let d1 = (start - point).norm();
+                    if d1 < best_dist {
+                        best_dist = d1;
+                        snapped = *start;
+                    }
+                    let d2 = (end - point).norm();
+                    if d2 < best_dist {
+                        best_dist = d2;
+                        snapped = *end;
+                    }
+                }
+                Entity::Circle { center, .. } => {
+                    let d = (center - point).norm();
+                    if d < best_dist {
+                        best_dist = d;
+                        snapped = *center;
+                    }
+                }
+                Entity::Point(p) => {
+                    let d = (p - point).norm();
+                    if d < best_dist {
+                        best_dist = d;
+                        snapped = *p;
+                    }
+                }
+            }
+        }
+
+        // Snap to grid if enabled and no endpoint found
+        if self.grid_enabled && best_dist >= 0.02 / zoom as f64 {
+            let x = (point.x / self.grid_size).round() * self.grid_size;
+            let y = (point.y / self.grid_size).round() * self.grid_size;
+            snapped = Point2::new(x, y);
+        }
+
+        snapped
+    }
 }
 
 pub fn build_ui(app: &Application) -> ApplicationWindow {
@@ -90,6 +138,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         selected_indices: Vec::new(),
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
+        grid_size: 0.1,
+        grid_enabled: true,
     }));
 
     let main_layout = Box::builder()
@@ -109,11 +159,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_select = Button::with_label("Sel");
     let btn_line = Button::with_label("Line");
     let btn_circle = Button::with_label("Circ");
+    let btn_grid = gtk4::ToggleButton::with_label("Grid");
+    btn_grid.set_active(true);
 
     toolbar.append(&btn_select);
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_line);
     toolbar.append(&btn_circle);
+    toolbar.append(&Separator::new(Orientation::Horizontal));
+    toolbar.append(&btn_grid);
 
     let app_state_select = app_state.clone();
     btn_select.connect_clicked(move |_| {
@@ -138,6 +192,18 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         state.selected_indices.clear();
     });
 
+    let app_state_grid = app_state.clone();
+    let viewport_grid_ref = Rc::new(RefCell::new(None));
+    let viewport_grid_ref_closure = viewport_grid_ref.clone();
+    btn_grid.connect_toggled(move |btn| {
+        let mut state = app_state_grid.borrow_mut();
+        state.grid_enabled = btn.is_active();
+        if let Some(vp) = viewport_grid_ref_closure.borrow().as_ref() {
+            let vp: &DrawingArea = vp;
+            vp.queue_draw();
+        }
+    });
+
     main_layout.append(&toolbar);
 
     let viewport_container = Box::builder()
@@ -158,6 +224,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .can_focus(true)
         .focusable(true)
         .build();
+    *viewport_grid_ref.borrow_mut() = Some(viewport.clone());
 
     viewport_container.append(&viewport);
 
@@ -195,6 +262,10 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 app.redo();
                 handled = true;
             }
+            gtk4::gdk::Key::g => {
+                app.grid_enabled = !app.grid_enabled;
+                handled = true;
+            }
             _ => {}
         }
 
@@ -210,18 +281,23 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     // Motion tracking
     let motion_controller = gtk4::EventControllerMotion::new();
     let view_state_motion = view_state.clone();
+    let app_state_motion = app_state.clone();
     let viewport_motion = viewport.clone();
     let status_bar_motion = status_bar.clone();
     motion_controller.connect_motion(move |_controller, x, y| {
-        let mut state = view_state_motion.borrow_mut();
-        state.cursor_pos = [x as f32, y as f32];
+        let mut view = view_state_motion.borrow_mut();
+        let app = app_state_motion.borrow();
+        view.cursor_pos = [x as f32, y as f32];
         
         let world = pixel_to_world(
             x as f32, y as f32, 
             viewport_motion.width() as f32, viewport_motion.height() as f32, 
-            state.offset, state.zoom
+            view.offset, view.zoom
         );
-        status_bar_motion.set_label(&format!("X: {:.3}, Y: {:.3}", world[0], world[1]));
+        let world_point = Point2::from(world);
+        let snapped = app.snap_point(world_point, view.zoom);
+        
+        status_bar_motion.set_label(&format!("X: {:.3}, Y: {:.3}", snapped.x, snapped.y));
         
         viewport_motion.queue_draw();
     });
@@ -245,10 +321,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
         use wcad_core::domain::Geometry;
         let world_point = Point2::from(world_pos);
+        let snapped = state.snap_point(world_point, view.zoom);
 
         match state.active_tool {
             Tool::Line => {
-                state.click_buffer.push(world_point);
+                state.click_buffer.push(snapped);
                 if state.click_buffer.len() == 2 {
                     state.push_undo();
                     let line = Entity::Line { 
@@ -260,7 +337,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 }
             }
             Tool::Circle => {
-                state.click_buffer.push(world_point);
+                state.click_buffer.push(snapped);
                 if state.click_buffer.len() == 2 {
                     state.push_undo();
                     let center = state.click_buffer[0];
@@ -359,28 +436,64 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         
         renderer.update_view(view.offset, view.zoom, width as f32, height as f32);
 
-        let mut render_entities: Vec<(Entity, [f32; 3])> = app.entities.iter().enumerate()
-            .map(|(i, e)| {
-                let color = if app.selected_indices.contains(&i) {
-                    [1.0, 1.0, 0.0] // Yellow for selected
-                } else {
-                    [1.0, 1.0, 1.0] // White for others
-                };
-                (e.clone(), color)
-            }).collect();
+        let mut render_entities: Vec<(Entity, [f32; 3])> = Vec::new();
 
-        // Rubber-banding preview
-        if !app.click_buffer.is_empty() {
-            let mouse_world = pixel_to_world(view.cursor_pos[0], view.cursor_pos[1], width as f32, height as f32, view.offset, view.zoom);
-            let mouse_point = Point2::from(mouse_world);
+        // Background Grid
+        if app.grid_enabled {
+            let grid_size = app.grid_size;
+            let w = width as f32;
+            let h = height as f32;
+            let min_world = pixel_to_world(0.0, h, w, h, view.offset, view.zoom);
+            let max_world = pixel_to_world(w, 0.0, w, h, view.offset, view.zoom);
             
+            let start_x = (min_world[0] as f64 / grid_size).floor() * grid_size;
+            let end_x = (max_world[0] as f64 / grid_size).ceil() * grid_size;
+            let start_y = (min_world[1] as f64 / grid_size).floor() * grid_size;
+            let end_y = (max_world[1] as f64 / grid_size).ceil() * grid_size;
+            
+            let x_steps = ((end_x - start_x) / grid_size).round() as i32;
+            let y_steps = ((end_y - start_y) / grid_size).round() as i32;
+            
+            // Only draw if zoom is high enough to see the grid clearly
+            if x_steps < 100 && y_steps < 100 {
+                for i in 0..=x_steps {
+                    let x = start_x + i as f64 * grid_size;
+                    for j in 0..=y_steps {
+                        let y = start_y + j as f64 * grid_size;
+                        render_entities.push((Entity::Point(Point2::new(x, y)), [0.2, 0.2, 0.2]));
+                    }
+                }
+            }
+        }
+
+        // Document Entities
+        for (i, e) in app.entities.iter().enumerate() {
+            let color = if app.selected_indices.contains(&i) {
+                [1.0, 1.0, 0.0] // Yellow for selected
+            } else {
+                [1.0, 1.0, 1.0] // White for others
+            };
+            render_entities.push((e.clone(), color));
+        }
+
+        // Rubber-banding & Snap Preview
+        let mouse_world = pixel_to_world(view.cursor_pos[0], view.cursor_pos[1], width as f32, height as f32, view.offset, view.zoom);
+        let mouse_point = Point2::from(mouse_world);
+        let snapped = app.snap_point(mouse_point, view.zoom);
+
+        if app.active_tool != Tool::Select {
+            // Draw a small cross or circle at the snapped position
+            render_entities.push((Entity::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, [0.0, 1.0, 0.0]));
+        }
+
+        if !app.click_buffer.is_empty() {
             match app.active_tool {
                 Tool::Line => {
-                    render_entities.push((Entity::Line { start: app.click_buffer[0], end: mouse_point }, [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::Line { start: app.click_buffer[0], end: snapped }, [0.5, 0.5, 1.0]));
                 }
                 Tool::Circle => {
                     let center = app.click_buffer[0];
-                    let radius = ((center.x - mouse_point.x).powi(2) + (center.y - mouse_point.y).powi(2)).sqrt();
+                    let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
                     render_entities.push((Entity::Circle { center, radius }, [0.5, 0.5, 1.0]));
                 }
                 _ => {}
@@ -457,6 +570,8 @@ mod tests {
             selected_indices: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            grid_size: 0.1,
+            grid_enabled: true,
         };
 
         // Add an entity
@@ -488,6 +603,8 @@ mod tests {
             selected_indices: vec![0, 2], // Select first and third
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            grid_size: 0.1,
+            grid_enabled: true,
         };
 
         state.delete_selected();
@@ -502,5 +619,44 @@ mod tests {
         // Undo delete
         state.undo();
         assert_eq!(state.entities.len(), 3);
+    }
+
+    #[test]
+    fn test_app_state_snap_point() {
+        let mut state = AppState {
+            entities: vec![
+                Entity::Line {
+                    start: Point2::new(0.0, 0.0),
+                    end: Point2::new(1.0, 0.0),
+                }
+            ],
+            active_tool: Tool::Select,
+            click_buffer: Vec::new(),
+            selected_indices: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            grid_size: 0.1,
+            grid_enabled: true,
+        };
+
+        // Snap to endpoint (0,0) - within 0.02 threshold
+        let snapped = state.snap_point(Point2::new(0.01, 0.01), 1.0);
+        assert_eq!(snapped, Point2::new(0.0, 0.0));
+
+        // Snap to grid (0.1, 0.1) - far from endpoints but grid enabled
+        let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
+        assert!((snapped.x - 0.1).abs() < 1e-6);
+        assert!((snapped.y - 0.1).abs() < 1e-6);
+
+        // Snap to endpoint takes priority over grid
+        // Endpoint at (0,0), Grid at (0.01, 0.01) - not a grid point but let's say (0,0) is also a grid point
+        // If we click at (0.01, 0.0), it should snap to endpoint (0,0)
+        let snapped = state.snap_point(Point2::new(0.01, 0.0), 1.0);
+        assert_eq!(snapped, Point2::new(0.0, 0.0));
+
+        // Grid snap disabled
+        state.grid_enabled = false;
+        let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
+        assert!((snapped.x - 0.12).abs() < 1e-6); // No snapping
     }
 }
