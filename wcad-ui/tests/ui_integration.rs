@@ -26,6 +26,11 @@ fn test_ui_initialization() {
     
     let title = window.title().map(|s| s.to_string()).unwrap_or_default();
     assert_eq!(title, "WCAD", "Window title should be 'WCAD'");
+
+    // Verify that the UI was built with the expected layout
+    // (Toolbar, Viewport Container, etc.)
+    let content = window.child().unwrap();
+    assert!(content.is_visible());
     
     // Cleanup
     window.close();

@@ -108,14 +108,37 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
 
     viewport_container.append(&viewport);
+
+    // Status Bar
+    let status_bar = gtk4::Label::builder()
+        .label("X: 0.000, Y: 0.000")
+        .halign(gtk4::Align::Start)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(3)
+        .margin_bottom(3)
+        .build();
+    viewport_container.append(&status_bar);
+
     main_layout.append(&viewport_container);
 
     // Motion tracking
     let motion_controller = gtk4::EventControllerMotion::new();
     let view_state_motion = view_state.clone();
     let viewport_motion = viewport.clone();
+    let status_bar_motion = status_bar.clone();
     motion_controller.connect_motion(move |_controller, x, y| {
-        view_state_motion.borrow_mut().cursor_pos = [x as f32, y as f32];
+        let mut state = view_state_motion.borrow_mut();
+        state.cursor_pos = [x as f32, y as f32];
+        
+        // Update status bar
+        let world = pixel_to_world(
+            x as f32, y as f32, 
+            viewport_motion.width() as f32, viewport_motion.height() as f32, 
+            state.offset, state.zoom
+        );
+        status_bar_motion.set_label(&format!("X: {:.3}, Y: {:.3}", world[0], world[1]));
+        
         viewport_motion.queue_draw();
     });
     viewport.add_controller(motion_controller);
