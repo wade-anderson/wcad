@@ -25,3 +25,5 @@ log = "0.4"
 env_logger = "0.10"
 pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
+pango = "0.19"
+pangocairo = "0.19"

@@ -9,6 +9,7 @@ fn main() {
         .build();
 
     app.connect_activate(|app| {
+        libadwaita::StyleManager::default().set_color_scheme(libadwaita::ColorScheme::PreferDark);
         build_ui(app);
     });
     app.run();

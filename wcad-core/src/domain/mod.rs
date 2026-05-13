@@ -9,6 +9,64 @@ pub enum GeometryKind {
     Rectangle { start: Point2<f64>, end: Point2<f64> },
     Arc { center: Point2<f64>, radius: f64, start_angle: f64, sweep_angle: f64 },
     Polyline(Vec<Point2<f64>>),
+    Dimension(DimensionKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DimensionKind {
+    Linear {
+        p1: Point2<f64>,
+        p2: Point2<f64>,
+        p_line: Point2<f64>,
+        horizontal: bool,
+    },
+    Aligned {
+        p1: Point2<f64>,
+        p2: Point2<f64>,
+        p_line: Point2<f64>,
+    },
+    Radial {
+        center: Point2<f64>,
+        point: Point2<f64>,
+        p_text: Point2<f64>,
+    },
+}
+
+impl DimensionKind {
+    pub fn get_text_info(&self) -> (String, Point2<f64>, f64) {
+        match self {
+            DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+                let val = if *horizontal { (p2.x - p1.x).abs() } else { (p2.y - p1.y).abs() };
+                let text = format!("{:.2}", val);
+                let pos = if *horizontal {
+                    Point2::new((p1.x + p2.x) / 2.0, p_line.y)
+                } else {
+                    Point2::new(p_line.x, (p1.y + p2.y) / 2.0)
+                };
+                (text, pos, 0.0)
+            }
+            DimensionKind::Aligned { p1, p2, p_line } => {
+                let dist = (p2 - p1).norm();
+                let dir = (p2 - p1).normalize();
+                let mut angle = dir.y.atan2(dir.x);
+                // Keep text upright
+                if angle > std::f64::consts::PI / 2.0 || angle < -std::f64::consts::PI / 2.0 {
+                    angle += std::f64::consts::PI;
+                }
+                
+                let normal = nalgebra::Vector2::new(-dir.y, dir.x);
+                let offset = (p_line - p1).dot(&normal);
+                let p1_dim = p1 + normal * offset;
+                let p2_dim = p2 + normal * offset;
+                let pos = Point2::new((p1_dim.x + p2_dim.x) / 2.0, (p1_dim.y + p2_dim.y) / 2.0);
+                (format!("{:.2}", dist), pos, angle)
+            }
+            DimensionKind::Radial { center, point, p_text } => {
+                let radius = (point - center).norm();
+                (format!("R{:.2}", radius), *p_text, 0.0)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +182,24 @@ impl Geometry for GeometryKind {
                 }
                 (Point2::new(min_x, min_y), Point2::new(max_x, max_y))
             }
+            GeometryKind::Dimension(dim) => {
+                match dim {
+                    DimensionKind::Linear { p1, p2, p_line, .. } | DimensionKind::Aligned { p1, p2, p_line, .. } => {
+                        let min_x = p1.x.min(p2.x).min(p_line.x);
+                        let min_y = p1.y.min(p2.y).min(p_line.y);
+                        let max_x = p1.x.max(p2.x).max(p_line.x);
+                        let max_y = p1.y.max(p2.y).max(p_line.y);
+                        (Point2::new(min_x, min_y), Point2::new(max_x, max_y))
+                    }
+                    DimensionKind::Radial { center, point, p_text } => {
+                        let min_x = center.x.min(point.x).min(p_text.x);
+                        let min_y = center.y.min(point.y).min(p_text.y);
+                        let max_x = center.x.max(point.x).max(p_text.x);
+                        let max_y = center.y.max(point.y).max(p_text.y);
+                        (Point2::new(min_x, min_y), Point2::new(max_x, max_y))
+                    }
+                }
+            }
         }
     }
 
@@ -190,6 +266,22 @@ impl Geometry for GeometryKind {
                 points.windows(2)
                     .map(|w| GeometryKind::Line { start: w[0], end: w[1] }.distance_to(point))
                     .fold(f64::INFINITY, f64::min)
+            }
+            GeometryKind::Dimension(dim) => {
+                match dim {
+                    DimensionKind::Linear { p1, p2, p_line, .. } | DimensionKind::Aligned { p1, p2, p_line, .. } => {
+                        let d1 = (p1 - point).norm();
+                        let d2 = (p2 - point).norm();
+                        let d3 = (p_line - point).norm();
+                        d1.min(d2).min(d3)
+                    }
+                    DimensionKind::Radial { center, point: p_on_circle, p_text } => {
+                        let d1 = (center - point).norm();
+                        let d2 = (p_on_circle - point).norm();
+                        let d3 = (p_text - point).norm();
+                        d1.min(d2).min(d3)
+                    }
+                }
             }
         }
     }

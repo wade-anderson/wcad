@@ -1,14 +1,61 @@
 use lyon::tessellation::*;
 use lyon::path::Path;
-use lyon::math::point;
 use wcad_core::domain::{Entity, GeometryKind};
 use crate::renderer::Vertex;
+use nalgebra::Point2;
+use wcad_core::domain::DimensionKind;
+
+fn point(x: f32, y: f32) -> lyon::math::Point {
+    lyon::math::point(x, y)
+}
+
+fn add_dashed_line(builder: &mut lyon::path::Builder, start: Point2<f64>, end: Point2<f64>, dash_len: f32, gap_len: f32) {
+    let dir = (end - start).cast::<f32>();
+    let total_len = dir.norm();
+    if total_len < 1e-6 { return; }
+    let dir_unit = dir / total_len;
+    
+    let mut current_dist = 0.0;
+    let mut drawing = true;
+    
+    while current_dist < total_len {
+        let step = if drawing { dash_len } else { gap_len };
+        let next_dist = (current_dist + step).min(total_len);
+        
+        if drawing {
+            let p1 = start.cast::<f32>() + dir_unit * current_dist;
+            let p2 = start.cast::<f32>() + dir_unit * next_dist;
+            builder.begin(point(p1.x, p1.y));
+            builder.line_to(point(p2.x, p2.y));
+            builder.end(false);
+        }
+        
+        current_dist = next_dist;
+        drawing = !drawing;
+    }
+}
+
+fn add_arrowhead(builder: &mut lyon::path::Builder, tip: Point2<f64>, from: Point2<f64>, size: f32) {
+    let dir = (tip - from).cast::<f32>();
+    let len = dir.norm();
+    if len < 1e-6 { return; }
+    let unit = dir / len;
+    let normal = nalgebra::Vector2::new(-unit.y, unit.x);
+    
+    let p1 = tip.cast::<f32>() - unit * size + normal * (size * 0.4);
+    let p2 = tip.cast::<f32>() - unit * size - normal * (size * 0.4);
+    
+    builder.begin(point(p1.x, p1.y));
+    builder.line_to(point(tip.x as f32, tip.y as f32));
+    builder.line_to(point(p2.x, p2.y));
+    builder.end(false);
+}
 
 pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Vec<u32>) {
     let mut geometry: VertexBuffers<Vertex, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
     let options = StrokeOptions::default()
-        .with_line_width(0.005)
+        .with_line_width(0.008)
         .with_line_cap(LineCap::Round);
 
     for entity in entities {
@@ -76,6 +123,80 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])]) -> (Vec<Vertex>, Ve
                         builder.line_to(point(p.x as f32, p.y as f32));
                     }
                     builder.end(false);
+                }
+            }
+            GeometryKind::Dimension(dim) => {
+                match dim {
+                    DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+                        let (_, p1_dim, p2_dim) = if *horizontal {
+                            ( (p2.x - p1.x).abs(), Point2::new(p1.x, p_line.y), Point2::new(p2.x, p_line.y) )
+                        } else {
+                            ( (p2.y - p1.y).abs(), Point2::new(p_line.x, p1.y), Point2::new(p_line.x, p2.y) )
+                        };
+                        let dash = 0.02f32;
+                        let gap = 0.01f32;
+                        let extension_overshoot = 0.02;
+                        
+                        // Extension lines (Dashed)
+                        let dir1 = (p1_dim - p1).normalize();
+                        let p1_ext = p1_dim + dir1 * extension_overshoot;
+                        add_dashed_line(&mut builder, *p1, p1_ext, dash, gap);
+                        
+                        let dir2 = (p2_dim - p2).normalize();
+                        let p2_ext = p2_dim + dir2 * extension_overshoot;
+                        add_dashed_line(&mut builder, *p2, p2_ext, dash, gap);
+                        
+                        // Dim line (Solid)
+                        builder.begin(point(p1_dim.x as f32, p1_dim.y as f32));
+                        builder.line_to(point(p2_dim.x as f32, p2_dim.y as f32));
+                        builder.end(false);
+                        
+                        // Arrowheads
+                        let arrow_size = 0.02f32;
+                        add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
+                        add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
+                    }
+                    DimensionKind::Aligned { p1, p2, p_line } => {
+                        let dir = (p2 - p1).normalize();
+                        let normal = nalgebra::Vector2::new(-dir.y, dir.x);
+                        let offset = (p_line - p1).dot(&normal);
+                        let p1_dim = p1 + normal * offset;
+                        let p2_dim = p2 + normal * offset;
+                        let dash = 0.02f32;
+                        let gap = 0.01f32;
+                        let extension_overshoot = 0.02;
+
+                        // Extension lines (Dashed)
+                        let dir1 = (p1_dim - p1).normalize();
+                        let p1_ext = p1_dim + dir1 * extension_overshoot;
+                        add_dashed_line(&mut builder, *p1, p1_ext, dash, gap);
+                        
+                        let dir2 = (p2_dim - p2).normalize();
+                        let p2_ext = p2_dim + dir2 * extension_overshoot;
+                        add_dashed_line(&mut builder, *p2, p2_ext, dash, gap);
+                        
+                        // Dim line (Solid)
+                        builder.begin(point(p1_dim.x as f32, p1_dim.y as f32));
+                        builder.line_to(point(p2_dim.x as f32, p2_dim.y as f32));
+                        builder.end(false);
+
+                        // Arrowheads
+                        let arrow_size = 0.02f32;
+                        add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
+                        add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
+                    }
+                    DimensionKind::Radial { center, point: p_on_circle, p_text } => {
+                        // For radial, usually the leader is solid
+                        builder.begin(point(center.x as f32, center.y as f32));
+                        builder.line_to(point(p_on_circle.x as f32, p_on_circle.y as f32));
+                        builder.end(false);
+                        builder.begin(point(p_on_circle.x as f32, p_on_circle.y as f32));
+                        builder.line_to(point(p_text.x as f32, p_text.y as f32));
+                        builder.end(false);
+                        
+                        // Arrowhead at circle point
+                        add_arrowhead(&mut builder, *p_on_circle, *center, 0.02f32);
+                    }
                 }
             }
         }

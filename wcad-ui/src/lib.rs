@@ -7,7 +7,7 @@ use gtk4::{Box, Orientation, DrawingArea, Button, Separator};
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use renderer::Renderer;
-use wcad_core::domain::{Entity, GeometryKind, Layer, Geometry};
+use wcad_core::domain::{Entity, GeometryKind, Layer, Geometry, DimensionKind};
 use tessellator::tessellate_entities;
 use nalgebra::Point2;
 use serde::{Serialize, Deserialize};
@@ -21,6 +21,9 @@ pub enum Tool {
     Rectangle,
     Arc,
     Polyline,
+    DimLinear,
+    DimAligned,
+    DimRadial,
 }
 
 pub struct ViewState {
@@ -223,20 +226,44 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .margin_end(6)
         .margin_top(6)
         .margin_bottom(6)
+        .css_classes(vec!["linked".to_string()])
         .build();
 
-    let btn_select = Button::with_label("Sel");
-    let btn_point = Button::with_label("Pnt");
+    let btn_select = Button::with_label("Select");
+    btn_select.set_tooltip_text(Some("Select (S)"));
+    
+    let btn_point = Button::with_label("Point");
+    btn_point.set_tooltip_text(Some("Point (P)"));
+    
     let btn_line = Button::with_label("Line");
-    let btn_circle = Button::with_label("Circ");
+    btn_line.set_tooltip_text(Some("Line (L)"));
+    
+    let btn_circle = Button::with_label("Circle");
+    btn_circle.set_tooltip_text(Some("Circle (C)"));
+    
     let btn_rect = Button::with_label("Rect");
+    btn_rect.set_tooltip_text(Some("Rectangle (R)"));
+    
     let btn_arc = Button::with_label("Arc");
+    btn_arc.set_tooltip_text(Some("Arc (A)"));
+    
     let btn_poly = Button::with_label("Poly");
-    let btn_grid = gtk4::ToggleButton::with_label("Grid");
-    btn_grid.set_active(true);
-
-    let btn_open = Button::with_label("Open");
-    let btn_save = Button::with_label("Save");
+    btn_poly.set_tooltip_text(Some("Polyline (Y)"));
+    
+    let btn_dim_lin = Button::with_label("Linear Dim");
+    btn_dim_lin.set_tooltip_text(Some("Linear Dimension"));
+    
+    let btn_dim_alg = Button::with_label("Aligned Dim");
+    btn_dim_alg.set_tooltip_text(Some("Aligned Dimension"));
+    
+    let btn_dim_rad = Button::with_label("Radial Dim");
+    btn_dim_rad.set_tooltip_text(Some("Radial Dimension"));
+    
+    let btn_grid = gtk4::ToggleButton::builder()
+        .label("Grid")
+        .tooltip_text("Toggle Grid (G)")
+        .active(true)
+        .build();
 
     toolbar.append(&btn_select);
     toolbar.append(&Separator::new(Orientation::Horizontal));
@@ -247,10 +274,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     toolbar.append(&btn_arc);
     toolbar.append(&btn_poly);
     toolbar.append(&Separator::new(Orientation::Horizontal));
-    toolbar.append(&btn_grid);
+    toolbar.append(&btn_dim_lin);
+    toolbar.append(&btn_dim_alg);
+    toolbar.append(&btn_dim_rad);
     toolbar.append(&Separator::new(Orientation::Horizontal));
-    toolbar.append(&btn_open);
-    toolbar.append(&btn_save);
+    toolbar.append(&btn_grid);
 
     main_layout.append(&toolbar);
 
@@ -260,9 +288,18 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .vexpand(true)
         .build();
 
+    let btn_open = Button::with_label("Open");
+    let btn_save = Button::with_label("Save");
+    let btn_undo = Button::with_label("Undo");
+    let btn_redo = Button::with_label("Redo");
+
     let header = HeaderBar::builder()
         .title_widget(&libadwaita::WindowTitle::new("WCAD", "2D Drafting for Linux"))
         .build();
+    header.pack_start(&btn_open);
+    header.pack_start(&btn_save);
+    header.pack_end(&btn_redo);
+    header.pack_end(&btn_undo);
 
     viewport_container.append(&header);
 
@@ -274,7 +311,14 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
     let viewport_grid_ref = Rc::new(RefCell::new(Some(viewport.clone())));
 
-    viewport_container.append(&viewport);
+    let viewport_frame = gtk4::Frame::builder()
+        .child(&viewport)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_bottom(6)
+        .build();
+
+    viewport_container.append(&viewport_frame);
 
     // Status Bar
     let status_bar = gtk4::Label::builder()
@@ -307,11 +351,13 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
     sidebar.append(&sidebar_title);
 
-    let props_container = Box::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(6)
+    let props_list = gtk4::ListBox::builder()
+        .selection_mode(gtk4::SelectionMode::None)
+        .css_classes(["boxed-list"])
         .build();
-    sidebar.append(&props_container);
+    sidebar.append(&props_list);
+
+    let props_container = props_list; // For compatibility with existing code
 
     let layers_container = Box::builder()
         .orientation(Orientation::Vertical)
@@ -440,7 +486,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     GeometryKind::Line { start, end } => {
-                        props_container.append(&gtk4::Label::new(Some("Type: Line")));
+                        let row = libadwaita::ActionRow::builder().title("Type: Line").build();
+                        props_container.append(&row);
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
@@ -491,7 +538,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     GeometryKind::Circle { center, radius } => {
-                        props_container.append(&gtk4::Label::new(Some("Type: Circle")));
+                        let row = libadwaita::ActionRow::builder().title("Type: Circle").build();
+                        props_container.append(&row);
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
@@ -530,7 +578,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     GeometryKind::Rectangle { start, end } => {
-                        props_container.append(&gtk4::Label::new(Some("Type: Rectangle")));
+                        let row = libadwaita::ActionRow::builder().title("Type: Rectangle").build();
+                        props_container.append(&row);
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
@@ -581,7 +630,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
-                        props_container.append(&gtk4::Label::new(Some("Type: Arc")));
+                        let row = libadwaita::ActionRow::builder().title("Type: Arc").build();
+                        props_container.append(&row);
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
@@ -644,7 +694,19 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         }
                     }
                     GeometryKind::Polyline(ref points) => {
-                        props_container.append(&gtk4::Label::new(Some(&format!("Type: Polyline ({} pts)", points.len()))));
+                        let row = libadwaita::ActionRow::builder()
+                            .title(&format!("Type: Polyline ({} pts)", points.len()))
+                            .build();
+                        props_container.append(&row);
+                    }
+                    GeometryKind::Dimension(dim) => {
+                        let title = match dim {
+                            DimensionKind::Linear { .. } => "Type: Linear Dim",
+                            DimensionKind::Aligned { .. } => "Type: Aligned Dim",
+                            DimensionKind::Radial { .. } => "Type: Radial Dim",
+                        };
+                        let row = libadwaita::ActionRow::builder().title(title).build();
+                        props_container.append(&row);
                     }
                 }
             } else if app.selected_indices.is_empty() {
@@ -741,6 +803,42 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         update_sidebar_poly();
     });
 
+    let app_state_dim_lin = app_state.clone();
+    let update_sidebar_dim_lin = update_sidebar.clone();
+    btn_dim_lin.connect_clicked(move |_| {
+        {
+            let mut state = app_state_dim_lin.borrow_mut();
+            state.active_tool = Tool::DimLinear;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_dim_lin();
+    });
+
+    let app_state_dim_alg = app_state.clone();
+    let update_sidebar_dim_alg = update_sidebar.clone();
+    btn_dim_alg.connect_clicked(move |_| {
+        {
+            let mut state = app_state_dim_alg.borrow_mut();
+            state.active_tool = Tool::DimAligned;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_dim_alg();
+    });
+
+    let app_state_dim_rad = app_state.clone();
+    let update_sidebar_dim_rad = update_sidebar.clone();
+    btn_dim_rad.connect_clicked(move |_| {
+        {
+            let mut state = app_state_dim_rad.borrow_mut();
+            state.active_tool = Tool::DimRadial;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_dim_rad();
+    });
+
     let app_state_grid = app_state.clone();
     let viewport_grid_ref_closure = viewport_grid_ref.clone();
     btn_grid.connect_toggled(move |btn| {
@@ -803,6 +901,23 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 }
             }
         });
+    });
+    let app_state_undo = app_state.clone();
+    let viewport_undo = viewport.clone();
+    let update_sidebar_undo = update_sidebar.clone();
+    btn_undo.connect_clicked(move |_| {
+        app_state_undo.borrow_mut().undo();
+        update_sidebar_undo();
+        viewport_undo.queue_draw();
+    });
+
+    let app_state_redo = app_state.clone();
+    let viewport_redo = viewport.clone();
+    let update_sidebar_redo = update_sidebar.clone();
+    btn_redo.connect_clicked(move |_| {
+        app_state_redo.borrow_mut().redo();
+        update_sidebar_redo();
+        viewport_redo.queue_draw();
     });
 
     // Keyboard Shortcuts
@@ -996,6 +1111,44 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         app.selected_indices.push(index);
                     }
                 }
+                Tool::DimLinear => {
+                    if app.click_buffer.len() < 2 {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let p1 = app.click_buffer[0];
+                        let p2 = app.click_buffer[1];
+                        // Determine orientation based on mouse distance from p1
+                        let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line: snapped, horizontal }), &layer_name));
+                        app.click_buffer.clear();
+                    }
+                }
+                Tool::DimAligned => {
+                    if app.click_buffer.len() < 2 {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let p1 = app.click_buffer[0];
+                        let p2 = app.click_buffer[1];
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Aligned { p1, p2, p_line: snapped }), &layer_name));
+                        app.click_buffer.clear();
+                    }
+                }
+                Tool::DimRadial => {
+                    if app.click_buffer.len() < 2 {
+                        app.click_buffer.push(snapped);
+                    } else {
+                        app.push_undo();
+                        let center = app.click_buffer[0];
+                        let point = app.click_buffer[1];
+                        let layer_name = app.layers[app.active_layer_index].name.clone();
+                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Radial { center, point, p_text: snapped }), &layer_name));
+                        app.click_buffer.clear();
+                    }
+                }
             }
         }
         update_sidebar_click();
@@ -1107,13 +1260,17 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             let x_steps = ((end_x - start_x) / grid_size).round() as i32;
             let y_steps = ((end_y - start_y) / grid_size).round() as i32;
             
-            if x_steps < 100 && y_steps < 100 {
+            if x_steps < 200 && y_steps < 200 {
+                let grid_color = [0.15, 0.15, 0.15];
+                // Vertical lines
                 for i in 0..=x_steps {
                     let x = start_x + i as f64 * grid_size;
-                    for j in 0..=y_steps {
-                        let y = start_y + j as f64 * grid_size;
-                        render_entities.push((Entity::new(GeometryKind::Point(Point2::new(x, y)), "grid"), [0.2, 0.2, 0.2]));
-                    }
+                    render_entities.push((Entity::new(GeometryKind::Line { start: Point2::new(x, start_y), end: Point2::new(x, end_y) }, "grid"), grid_color));
+                }
+                // Horizontal lines
+                for j in 0..=y_steps {
+                    let y = start_y + j as f64 * grid_size;
+                    render_entities.push((Entity::new(GeometryKind::Line { start: Point2::new(start_x, y), end: Point2::new(end_x, y) }, "grid"), grid_color));
                 }
             }
         }
@@ -1124,7 +1281,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 if !layer.visible { continue; }
             }
             let color = if app.selected_indices.contains(&i) {
-                [1.0, 1.0, 0.0]
+                [0.0, 1.0, 1.0] // Cyan selection
             } else {
                 app.layers.iter().find(|l| l.name == e.layer).map(|l| l.color).unwrap_or([1.0, 1.0, 1.0])
             };
@@ -1137,26 +1294,26 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let snapped = app.snap_point(mouse_point, view.zoom);
 
         if app.active_tool != Tool::Select {
-            render_entities.push((Entity::new(GeometryKind::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, "preview"), [0.0, 1.0, 0.0]));
+            render_entities.push((Entity::new(GeometryKind::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, "preview"), [1.0, 0.0, 1.0])); // Magenta snap
         }
 
         if !app.click_buffer.is_empty() {
             match app.active_tool {
                 Tool::Line => {
-                    render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0])); // Magenta preview
                 }
                 Tool::Circle => {
                     let center = app.click_buffer[0];
                     let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
-                    render_entities.push((Entity::new(GeometryKind::Circle { center, radius }, "preview"), [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Circle { center, radius }, "preview"), [1.0, 0.0, 1.0]));
                 }
                 Tool::Rectangle => {
-                    render_entities.push((Entity::new(GeometryKind::Rectangle { start: app.click_buffer[0], end: snapped }, "preview"), [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Rectangle { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                 }
                 Tool::Arc => {
                     let center = app.click_buffer[0];
                     if app.click_buffer.len() == 1 {
-                        render_entities.push((Entity::new(GeometryKind::Line { start: center, end: snapped }, "preview"), [0.5, 0.5, 1.0]));
+                        render_entities.push((Entity::new(GeometryKind::Line { start: center, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                     } else if app.click_buffer.len() == 2 {
                         let p1 = app.click_buffer[1];
                         let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
@@ -1164,13 +1321,41 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
                         let mut sweep_angle = end_angle - start_angle;
                         if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
-                        render_entities.push((Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, "preview"), [0.5, 0.5, 1.0]));
+                        render_entities.push((Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, "preview"), [1.0, 0.0, 1.0]));
                     }
                 }
                 Tool::Polyline => {
                     let mut pts = app.click_buffer.clone();
                     pts.push(snapped);
-                    render_entities.push((Entity::new(GeometryKind::Polyline(pts), "preview"), [0.5, 0.5, 1.0]));
+                    render_entities.push((Entity::new(GeometryKind::Polyline(pts), "preview"), [1.0, 0.0, 1.0]));
+                }
+                Tool::DimLinear => {
+                    if app.click_buffer.len() == 1 {
+                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                    } else if app.click_buffer.len() == 2 {
+                        let p1 = app.click_buffer[0];
+                        let p2 = app.click_buffer[1];
+                        let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
+                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line: snapped, horizontal }), "preview"), [1.0, 0.0, 1.0]));
+                    }
+                }
+                Tool::DimAligned => {
+                    if app.click_buffer.len() == 1 {
+                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                    } else if app.click_buffer.len() == 2 {
+                        let p1 = app.click_buffer[0];
+                        let p2 = app.click_buffer[1];
+                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Aligned { p1, p2, p_line: snapped }), "preview"), [1.0, 0.0, 1.0]));
+                    }
+                }
+                Tool::DimRadial => {
+                    if app.click_buffer.len() == 1 {
+                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                    } else if app.click_buffer.len() == 2 {
+                        let center = app.click_buffer[0];
+                        let point = app.click_buffer[1];
+                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Radial { center, point, p_text: snapped }), "preview"), [1.0, 0.0, 1.0]));
+                    }
                 }
                 _ => {}
             }
@@ -1189,6 +1374,45 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         }
         cr.set_source_surface(&surface, 0.0, 0.0).unwrap();
         cr.paint().unwrap();
+
+        // Render Dimension Text via Cairo/Pango
+        for (e, color) in &render_entities {
+            if let GeometryKind::Dimension(dim) = &e.geometry {
+                let (text, pos, angle) = dim.get_text_info();
+                let pixel_pos = world_to_pixel(pos.x, pos.y, width as f32, height as f32, view.offset, view.zoom);
+                
+                cr.set_source_rgb(color[0] as f64, color[1] as f64, color[2] as f64);
+                
+                cr.save().unwrap();
+                cr.translate(pixel_pos[0].round() as f64, pixel_pos[1].round() as f64);
+                cr.rotate(-angle);
+                
+                let layout = pangocairo::functions::create_layout(cr);
+                layout.set_text(&text);
+                let mut font_desc = pango::FontDescription::new();
+                font_desc.set_family("sans-serif");
+                font_desc.set_size(11 * pango::SCALE);
+                font_desc.set_weight(pango::Weight::Bold);
+                layout.set_font_description(Some(&font_desc));
+
+                let (_ink_rect, logical_rect) = layout.extents();
+                let width_px = logical_rect.width() as f64 / pango::SCALE as f64;
+                let height_px = logical_rect.height() as f64 / pango::SCALE as f64;
+                
+                // Draw a masking background box to "break" the dimension line
+                let padding_x = 4.0;
+                let padding_y = 1.0;
+                cr.set_source_rgb(0.1, 0.1, 0.1); // Match the dark background
+                cr.rectangle(-width_px / 2.0 - padding_x, -height_px / 2.0 - padding_y, width_px + 2.0 * padding_x, height_px + 2.0 * padding_y);
+                cr.fill().unwrap();
+
+                // Draw the text centered in the "break"
+                cr.set_source_rgb(1.0, 1.0, 1.0); // White text
+                cr.move_to(-width_px / 2.0, -height_px / 2.0); 
+                pangocairo::functions::show_layout(cr, &layout);
+                cr.restore().unwrap();
+            }
+        }
     });
 
     let window = ApplicationWindow::builder()
@@ -1208,6 +1432,13 @@ fn pixel_to_world(x: f32, y: f32, width: f32, height: f32, offset: [f32; 2], zoo
     let wx = (x - width / 2.0) * (aspect / (width / 2.0)) / zoom + offset[0];
     let wy = -(y - height / 2.0) * (1.0 / (height / 2.0)) / zoom + offset[1];
     [wx as f64, wy as f64]
+}
+
+fn world_to_pixel(x: f64, y: f64, width: f32, height: f32, offset: [f32; 2], zoom: f32) -> [f32; 2] {
+    let aspect = width / height;
+    let px = (x as f32 - offset[0]) * zoom * (width / 2.0) / aspect + width / 2.0;
+    let py = -(y as f32 - offset[1]) * zoom * (height / 2.0) + height / 2.0;
+    [px, py]
 }
 
 #[cfg(test)]
@@ -1344,17 +1575,16 @@ mod tests {
     }
 }
 
-fn append_f64_prop<F>(parent: &Box, label: &str, value: f64, on_change: F)
+fn append_f64_prop<F>(parent: &gtk4::ListBox, label: &str, value: f64, on_change: F)
 where
     F: Fn(f64) + 'static,
 {
-    let row = Box::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
+    let row = libadwaita::ActionRow::builder()
+        .title(label)
         .build();
-    row.append(&gtk4::Label::new(Some(label)));
     let entry = gtk4::Entry::builder()
         .text(&format!("{:.3}", value))
+        .valign(gtk4::Align::Center)
         .width_chars(8)
         .build();
     entry.connect_activate(move |e| {
@@ -1362,6 +1592,6 @@ where
             on_change(val);
         }
     });
-    row.append(&entry);
+    row.add_suffix(&entry);
     parent.append(&row);
 }
