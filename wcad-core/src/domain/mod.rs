@@ -269,17 +269,34 @@ impl Geometry for GeometryKind {
             }
             GeometryKind::Dimension(dim) => {
                 match dim {
-                    DimensionKind::Linear { p1, p2, p_line, .. } | DimensionKind::Aligned { p1, p2, p_line, .. } => {
-                        let d1 = (p1 - point).norm();
-                        let d2 = (p2 - point).norm();
-                        let d3 = (p_line - point).norm();
-                        d1.min(d2).min(d3)
+                    DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+                        let (p1_dim, p2_dim) = if *horizontal {
+                            ( Point2::new(p1.x, p_line.y), Point2::new(p2.x, p_line.y) )
+                        } else {
+                            ( Point2::new(p_line.x, p1.y), Point2::new(p_line.x, p2.y) )
+                        };
+                        
+                        let d_line = GeometryKind::Line { start: p1_dim, end: p2_dim }.distance_to(point);
+                        let d_ext1 = GeometryKind::Line { start: *p1, end: p1_dim }.distance_to(point);
+                        let d_ext2 = GeometryKind::Line { start: *p2, end: p2_dim }.distance_to(point);
+                        d_line.min(d_ext1).min(d_ext2)
+                    }
+                    DimensionKind::Aligned { p1, p2, p_line } => {
+                        let dir = (p2 - p1).normalize();
+                        let normal = nalgebra::Vector2::new(-dir.y, dir.x);
+                        let offset = (p_line - p1).dot(&normal);
+                        let p1_dim = p1 + normal * offset;
+                        let p2_dim = p2 + normal * offset;
+                        
+                        let d_line = GeometryKind::Line { start: p1_dim, end: p2_dim }.distance_to(point);
+                        let d_ext1 = GeometryKind::Line { start: *p1, end: p1_dim }.distance_to(point);
+                        let d_ext2 = GeometryKind::Line { start: *p2, end: p2_dim }.distance_to(point);
+                        d_line.min(d_ext1).min(d_ext2)
                     }
                     DimensionKind::Radial { center, point: p_on_circle, p_text } => {
-                        let d1 = (center - point).norm();
-                        let d2 = (p_on_circle - point).norm();
-                        let d3 = (p_text - point).norm();
-                        d1.min(d2).min(d3)
+                        let d_l1 = GeometryKind::Line { start: *center, end: *p_on_circle }.distance_to(point);
+                        let d_l2 = GeometryKind::Line { start: *p_on_circle, end: *p_text }.distance_to(point);
+                        d_l1.min(d_l2)
                     }
                 }
             }
@@ -501,5 +518,31 @@ mod tests {
         let (min, max) = geom.bounding_box();
         assert_eq!(min, Point2::new(-5.0, -10.0));
         assert_eq!(max, Point2::new(5.0, 10.0));
+    }
+
+    #[test]
+    fn test_dimension_bounding_box() {
+        let p1 = Point2::new(0.0, 0.0);
+        let p2 = Point2::new(10.0, 0.0);
+        let p_line = Point2::new(5.0, 5.0);
+        
+        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true });
+        let (min, max) = geom.bounding_box();
+        // Includes p1, p2, and the p_line height
+        assert_eq!(min, Point2::new(0.0, 0.0));
+        assert_eq!(max, Point2::new(10.0, 5.0));
+    }
+
+    #[test]
+    fn test_dimension_distance() {
+        let p1 = Point2::new(0.0, 0.0);
+        let p2 = Point2::new(10.0, 0.0);
+        let p_line = Point2::new(5.0, 5.0);
+        
+        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true });
+        // Point on the dimension line (at y=5)
+        assert!(geom.distance_to(&Point2::new(5.0, 5.0)) < 1e-6);
+        // Point on extension line (at x=0, y=2.5)
+        assert!(geom.distance_to(&Point2::new(0.0, 2.5)) < 1e-6);
     }
 }

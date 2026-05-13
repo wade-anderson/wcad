@@ -50,6 +50,7 @@ pub struct AppState {
     pub grid_size: f64,
     pub grid_enabled: bool,
     pub grid_factor: f64,
+    pub grid_auto: bool,
     pub mouse_world_pos: Point2<f64>,
 }
 
@@ -221,6 +222,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         grid_size: 0.1,
         grid_enabled: true,
         grid_factor: 0.0,
+        grid_auto: true,
         mouse_world_pos: Point2::new(0.0, 0.0),
     }));
 
@@ -290,12 +292,24 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     toolbar.append(&Separator::new(Orientation::Horizontal));
     toolbar.append(&btn_grid);
     
-    let grid_adj = gtk4::Adjustment::new(0.0, -10.0, 10.0, 1.0, 2.0, 0.0);
+    let grid_adj = gtk4::Adjustment::new(0.0, -1000.0, 1000.0, 1.0, 10.0, 0.0);
     let spin_grid = gtk4::SpinButton::builder()
         .adjustment(&grid_adj)
         .digits(0)
         .tooltip_text("Grid Factor (-10x to +10x)")
         .build();
+    let btn_grid_auto = gtk4::ToggleButton::builder()
+        .label("Auto")
+        .tooltip_text("Automatically adjust grid density")
+        .active(true)
+        .build();
+    {
+        let app_state = app_state.clone();
+        btn_grid_auto.connect_toggled(move |btn| {
+            app_state.borrow_mut().grid_auto = btn.is_active();
+        });
+    }
+    toolbar.append(&btn_grid_auto);
     toolbar.append(&gtk4::Label::new(Some("Grid Factor")));
     toolbar.append(&spin_grid);
 
@@ -331,10 +345,10 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
     {
         let app_state = app_state.clone();
-        let viewport = viewport.clone();
+        let viewport_scroll = viewport.clone();
         spin_grid.connect_value_changed(move |spin| {
             app_state.borrow_mut().grid_factor = spin.value();
-            viewport.queue_draw();
+            viewport_scroll.queue_draw();
         });
     }
     let viewport_grid_ref = Rc::new(RefCell::new(Some(viewport.clone())));
@@ -1316,28 +1330,56 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let scroll_controller = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
     let view_state_scroll = view_state.clone();
     let viewport_scroll = viewport.clone();
+    let app_state_scroll = app_state.clone();
+    let spin_grid_ref = spin_grid.clone();
     scroll_controller.connect_scroll(move |_controller, _dx, dy| {
-        let mut state = view_state_scroll.borrow_mut();
-        let old_zoom = state.zoom;
-        let zoom_factor = 1.1f32;
+        let mut view = view_state_scroll.borrow_mut();
+        let mut app = app_state_scroll.borrow_mut();
+        let old_zoom = view.zoom;
         
+        let zoom_factor = 1.1f32;
         if dy < 0.0 {
-            state.zoom *= zoom_factor;
+            view.zoom *= zoom_factor;
         } else {
-            state.zoom /= zoom_factor;
+            view.zoom /= zoom_factor;
+        }
+        
+        let mut rounded_factor_to_update = None;
+        if app.grid_auto {
+            let height = viewport_scroll.height() as f64;
+            let base_grid = app.grid_size;
+            let target_pixel_spacing = 60.0;
+            let multiplier = (base_grid * height * view.zoom as f64) / (2.0 * target_pixel_spacing);
+            
+            let factor = if multiplier >= 1.0 {
+                multiplier - 1.0
+            } else {
+                1.0 - (1.0 / multiplier)
+            };
+            
+            let rounded_factor = factor.round();
+            app.grid_factor = rounded_factor;
+            rounded_factor_to_update = Some(rounded_factor);
         }
 
-        let new_zoom = state.zoom;
+        let new_zoom = view.zoom;
         let w = viewport_scroll.width() as f32;
         let h = viewport_scroll.height() as f32;
         
-        let world_cursor = pixel_to_world(state.cursor_pos[0], state.cursor_pos[1], w, h, state.offset, old_zoom);
+        let world_cursor = pixel_to_world(view.cursor_pos[0], view.cursor_pos[1], w, h, view.offset, old_zoom);
 
-        state.offset[0] = world_cursor[0] as f32 - (world_cursor[0] as f32 - state.offset[0]) * (old_zoom / new_zoom);
-        state.offset[1] = world_cursor[1] as f32 - (world_cursor[1] as f32 - state.offset[1]) * (old_zoom / new_zoom);
+        view.offset[0] = world_cursor[0] as f32 - (world_cursor[0] as f32 - view.offset[0]) * (old_zoom / new_zoom);
+        view.offset[1] = world_cursor[1] as f32 - (world_cursor[1] as f32 - view.offset[1]) * (old_zoom / new_zoom);
+
+        drop(app);
+        drop(view);
+
+        if let Some(val) = rounded_factor_to_update {
+            spin_grid_ref.set_value(val);
+        }
 
         viewport_scroll.queue_draw();
-        gtk4::glib::Propagation::Proceed
+        gtk4::glib::Propagation::Stop
     });
     viewport.add_controller(scroll_controller);
 
@@ -1625,7 +1667,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Add an entity
@@ -1660,7 +1702,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         state.delete_selected();
@@ -1694,7 +1736,7 @@ mod tests {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             grid_size: 0.1,
-            grid_enabled: true, grid_factor: 0.0, mouse_world_pos: Point2::new(0.0, 0.0),
+            grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
         };
 
         // Snap to endpoint (0,0) - within 0.02 threshold
