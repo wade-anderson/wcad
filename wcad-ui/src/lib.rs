@@ -175,31 +175,228 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     toolbar.append(&btn_open);
     toolbar.append(&btn_save);
 
+    main_layout.append(&toolbar);
+
+    let viewport_container = Box::builder()
+        .orientation(Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+
+    let header = HeaderBar::builder()
+        .title_widget(&libadwaita::WindowTitle::new("WCAD", "2D Drafting for Linux"))
+        .build();
+
+    viewport_container.append(&header);
+
+    let viewport = DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .can_focus(true)
+        .focusable(true)
+        .build();
+    let viewport_grid_ref = Rc::new(RefCell::new(Some(viewport.clone())));
+
+    viewport_container.append(&viewport);
+
+    // Status Bar
+    let status_bar = gtk4::Label::builder()
+        .label("X: 0.000, Y: 0.000")
+        .halign(gtk4::Align::Start)
+        .margin_start(6)
+        .margin_end(6)
+        .margin_top(3)
+        .margin_bottom(3)
+        .build();
+    viewport_container.append(&status_bar);
+
+    main_layout.append(&viewport_container);
+
+    // Sidebar (Property Editor)
+    let sidebar = Box::builder()
+        .orientation(Orientation::Vertical)
+        .width_request(200)
+        .spacing(12)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(12)
+        .margin_bottom(12)
+        .build();
+
+    let sidebar_title = gtk4::Label::builder()
+        .label("Properties")
+        .css_classes(["title-2"])
+        .halign(gtk4::Align::Start)
+        .build();
+    sidebar.append(&sidebar_title);
+
+    let props_container = Box::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(6)
+        .build();
+    sidebar.append(&props_container);
+
+    main_layout.append(&sidebar);
+
+    let update_sidebar = Rc::new({
+        let app_state = app_state.clone();
+        let props_container = props_container.clone();
+        let viewport = viewport.clone();
+        move || {
+            while let Some(child) = props_container.first_child() {
+                props_container.remove(&child);
+            }
+
+            let app = app_state.borrow();
+            if app.selected_indices.len() == 1 {
+                let index = app.selected_indices[0];
+                let entity = app.entities[index].clone();
+                
+                match entity {
+                    Entity::Point(p) => {
+                        props_container.append(&gtk4::Label::new(Some("Type: Point")));
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "X", p.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Point(ref mut p) = app.entities[index] { p.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Y", p.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Point(ref mut p) = app.entities[index] { p.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                    }
+                    Entity::Line { start, end } => {
+                        props_container.append(&gtk4::Label::new(Some("Type: Line")));
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Start X", start.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Line { ref mut start, .. } = app.entities[index] { start.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Start Y", start.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Line { ref mut start, .. } = app.entities[index] { start.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "End X", end.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Line { ref mut end, .. } = app.entities[index] { end.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "End Y", end.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Line { ref mut end, .. } = app.entities[index] { end.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                    }
+                    Entity::Circle { center, radius } => {
+                        props_container.append(&gtk4::Label::new(Some("Type: Circle")));
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Center X", center.x, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Circle { ref mut center, .. } = app.entities[index] { center.x = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Center Y", center.y, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Circle { ref mut center, .. } = app.entities[index] { center.y = val; }
+                                viewport.queue_draw();
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            append_f64_prop(&props_container, "Radius", radius, move |val| {
+                                let mut app = app_state.borrow_mut();
+                                app.push_undo();
+                                if let Entity::Circle { ref mut radius, .. } = app.entities[index] { *radius = val.max(0.0); }
+                                viewport.queue_draw();
+                            });
+                        }
+                    }
+                }
+            } else if app.selected_indices.is_empty() {
+                props_container.append(&gtk4::Label::new(Some("No selection")));
+            } else {
+                props_container.append(&gtk4::Label::new(Some("Multiple selected")));
+            }
+        }
+    });
+
     let app_state_select = app_state.clone();
+    let update_sidebar_select = update_sidebar.clone();
     btn_select.connect_clicked(move |_| {
-        let mut state = app_state_select.borrow_mut();
-        state.active_tool = Tool::Select;
-        state.click_buffer.clear();
+        {
+            let mut state = app_state_select.borrow_mut();
+            state.active_tool = Tool::Select;
+            state.click_buffer.clear();
+        }
+        update_sidebar_select();
     });
 
     let app_state_line = app_state.clone();
+    let update_sidebar_line = update_sidebar.clone();
     btn_line.connect_clicked(move |_| {
-        let mut state = app_state_line.borrow_mut();
-        state.active_tool = Tool::Line;
-        state.click_buffer.clear();
-        state.selected_indices.clear();
+        {
+            let mut state = app_state_line.borrow_mut();
+            state.active_tool = Tool::Line;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_line();
     });
 
     let app_state_circle = app_state.clone();
+    let update_sidebar_circle = update_sidebar.clone();
     btn_circle.connect_clicked(move |_| {
-        let mut state = app_state_circle.borrow_mut();
-        state.active_tool = Tool::Circle;
-        state.click_buffer.clear();
-        state.selected_indices.clear();
+        {
+            let mut state = app_state_circle.borrow_mut();
+            state.active_tool = Tool::Circle;
+            state.click_buffer.clear();
+            state.selected_indices.clear();
+        }
+        update_sidebar_circle();
     });
 
     let app_state_grid = app_state.clone();
-    let viewport_grid_ref = Rc::new(RefCell::new(None));
     let viewport_grid_ref_closure = viewport_grid_ref.clone();
     btn_grid.connect_toggled(move |btn| {
         let mut state = app_state_grid.borrow_mut();
@@ -212,9 +409,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
     let app_state_open = app_state.clone();
     let viewport_open_ref = viewport_grid_ref.clone();
+    let update_sidebar_open = update_sidebar.clone();
     btn_open.connect_clicked(move |_| {
         let state = app_state_open.clone();
         let viewport_ref = viewport_open_ref.clone();
+        let update_sidebar = update_sidebar_open.clone();
         let dialog = gtk4::FileDialog::builder()
             .title("Open WCAD File")
             .build();
@@ -224,10 +423,13 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 if let Some(path) = file.path() {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if let Ok(entities) = serde_json::from_str::<Vec<Entity>>(&content) {
-                            let mut app = state.borrow_mut();
-                            app.push_undo();
-                            app.entities = entities;
-                            app.selected_indices.clear();
+                            {
+                                let mut app = state.borrow_mut();
+                                app.push_undo();
+                                app.entities = entities;
+                                app.selected_indices.clear();
+                            }
+                            update_sidebar();
                             if let Some(vp) = viewport_ref.borrow().as_ref() {
                                 vp.queue_draw();
                             }
@@ -258,47 +460,11 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         });
     });
 
-    main_layout.append(&toolbar);
-
-    let viewport_container = Box::builder()
-        .orientation(Orientation::Vertical)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let header = HeaderBar::builder()
-        .title_widget(&libadwaita::WindowTitle::new("WCAD", "2D Drafting for Linux"))
-        .build();
-
-    viewport_container.append(&header);
-
-    let viewport = DrawingArea::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .can_focus(true)
-        .focusable(true)
-        .build();
-    *viewport_grid_ref.borrow_mut() = Some(viewport.clone());
-
-    viewport_container.append(&viewport);
-
-    // Status Bar
-    let status_bar = gtk4::Label::builder()
-        .label("X: 0.000, Y: 0.000")
-        .halign(gtk4::Align::Start)
-        .margin_start(6)
-        .margin_end(6)
-        .margin_top(3)
-        .margin_bottom(3)
-        .build();
-    viewport_container.append(&status_bar);
-
-    main_layout.append(&viewport_container);
-
     // Keyboard Shortcuts
     let key_controller = gtk4::EventControllerKey::new();
     let app_state_key = app_state.clone();
     let viewport_key = viewport.clone();
+    let update_sidebar_key = update_sidebar.clone();
     key_controller.connect_key_pressed(move |_controller, key, _code, state| {
         let mut app = app_state_key.borrow_mut();
         let mut handled = false;
@@ -324,6 +490,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         }
 
         if handled {
+            { drop(app); } // Explicitly drop mutable borrow
+            update_sidebar_key();
             viewport_key.queue_draw();
             gtk4::glib::Propagation::Stop
         } else {
@@ -362,64 +530,68 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let app_state_click = app_state.clone();
     let view_state_click = view_state.clone();
     let viewport_click = viewport.clone();
+    let update_sidebar_click = update_sidebar.clone();
     click_gesture.connect_pressed(move |_gesture, _n_press, x, y| {
         viewport_click.grab_focus();
-        let mut state = app_state_click.borrow_mut();
-        let view = view_state_click.borrow();
-        
-        let world_pos = pixel_to_world(
-            x as f32, y as f32, 
-            viewport_click.width() as f32, viewport_click.height() as f32, 
-            view.offset, view.zoom
-        );
+        {
+            let mut state = app_state_click.borrow_mut();
+            let view = view_state_click.borrow();
+            
+            let world_pos = pixel_to_world(
+                x as f32, y as f32, 
+                viewport_click.width() as f32, viewport_click.height() as f32, 
+                view.offset, view.zoom
+            );
 
-        use wcad_core::domain::Geometry;
-        let world_point = Point2::from(world_pos);
-        let snapped = state.snap_point(world_point, view.zoom);
+            use wcad_core::domain::Geometry;
+            let world_point = Point2::from(world_pos);
+            let snapped = state.snap_point(world_point, view.zoom);
 
-        match state.active_tool {
-            Tool::Line => {
-                state.click_buffer.push(snapped);
-                if state.click_buffer.len() == 2 {
-                    state.push_undo();
-                    let line = Entity::Line { 
-                        start: state.click_buffer[0], 
-                        end: state.click_buffer[1] 
-                    };
-                    state.entities.push(line);
-                    state.click_buffer.clear();
-                }
-            }
-            Tool::Circle => {
-                state.click_buffer.push(snapped);
-                if state.click_buffer.len() == 2 {
-                    state.push_undo();
-                    let center = state.click_buffer[0];
-                    let p2 = state.click_buffer[1];
-                    let radius = ((center.x - p2.x).powi(2) + (center.y - p2.y).powi(2)).sqrt();
-                    let circle = Entity::Circle { center, radius };
-                    state.entities.push(circle);
-                    state.click_buffer.clear();
-                }
-            }
-            Tool::Select => {
-                let mut closest = None;
-                let mut min_dist = 0.02 / view.zoom as f64; // Adaptive selection threshold
-                
-                for (i, entity) in state.entities.iter().enumerate() {
-                    let dist = entity.distance_to(&world_point);
-                    if dist < min_dist {
-                        min_dist = dist;
-                        closest = Some(i);
+            match state.active_tool {
+                Tool::Line => {
+                    state.click_buffer.push(snapped);
+                    if state.click_buffer.len() == 2 {
+                        state.push_undo();
+                        let line = Entity::Line { 
+                            start: state.click_buffer[0], 
+                            end: state.click_buffer[1] 
+                        };
+                        state.entities.push(line);
+                        state.click_buffer.clear();
                     }
                 }
-                
-                state.selected_indices.clear();
-                if let Some(index) = closest {
-                    state.selected_indices.push(index);
+                Tool::Circle => {
+                    state.click_buffer.push(snapped);
+                    if state.click_buffer.len() == 2 {
+                        state.push_undo();
+                        let center = state.click_buffer[0];
+                        let p2 = state.click_buffer[1];
+                        let radius = ((center.x - p2.x).powi(2) + (center.y - p2.y).powi(2)).sqrt();
+                        let circle = Entity::Circle { center, radius };
+                        state.entities.push(circle);
+                        state.click_buffer.clear();
+                    }
+                }
+                Tool::Select => {
+                    let mut closest = None;
+                    let mut min_dist = 0.02 / view.zoom as f64; // Adaptive selection threshold
+                    
+                    for (i, entity) in state.entities.iter().enumerate() {
+                        let dist = entity.distance_to(&world_point);
+                        if dist < min_dist {
+                            min_dist = dist;
+                            closest = Some(i);
+                        }
+                    }
+                    
+                    state.selected_indices.clear();
+                    if let Some(index) = closest {
+                        state.selected_indices.push(index);
+                    }
                 }
             }
         }
+        update_sidebar_click();
         viewport_click.queue_draw();
     });
     viewport.add_controller(click_gesture);
@@ -713,4 +885,26 @@ mod tests {
         let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
         assert!((snapped.x - 0.12).abs() < 1e-6); // No snapping
     }
+}
+
+fn append_f64_prop<F>(parent: &Box, label: &str, value: f64, on_change: F)
+where
+    F: Fn(f64) + 'static,
+{
+    let row = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    row.append(&gtk4::Label::new(Some(label)));
+    let entry = gtk4::Entry::builder()
+        .text(&format!("{:.3}", value))
+        .width_chars(8)
+        .build();
+    entry.connect_activate(move |e| {
+        if let Ok(val) = e.text().parse::<f64>() {
+            on_change(val);
+        }
+    });
+    row.append(&entry);
+    parent.append(&row);
 }
