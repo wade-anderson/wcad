@@ -10,6 +10,7 @@ pub enum Entity {
 
 pub trait Geometry {
     fn bounding_box(&self) -> (Point2<f64>, Point2<f64>);
+    fn distance_to(&self, point: &Point2<f64>) -> f64;
 }
 
 impl Geometry for Entity {
@@ -27,6 +28,27 @@ impl Geometry for Entity {
                 let min = Point2::new(center.x - radius, center.y - radius);
                 let max = Point2::new(center.x + radius, center.y + radius);
                 (min, max)
+            }
+        }
+    }
+
+    fn distance_to(&self, point: &Point2<f64>) -> f64 {
+        match self {
+            Entity::Point(p) => (p - point).norm(),
+            Entity::Line { start, end } => {
+                let line_vec = end - start;
+                let point_vec = point - start;
+                let line_len_sq = line_vec.norm_squared();
+                if line_len_sq == 0.0 {
+                    return (start - point).norm();
+                }
+                let t = (point_vec.dot(&line_vec) / line_len_sq).clamp(0.0, 1.0);
+                let projection = start + line_vec * t;
+                (projection - point).norm()
+            }
+            Entity::Circle { center, radius } => {
+                let dist_to_center = (center - point).norm();
+                (dist_to_center - radius).abs()
             }
         }
     }
@@ -63,5 +85,39 @@ mod tests {
         let (min, max) = entity.bounding_box();
         assert_eq!(min, Point2::new(3.0, 3.0));
         assert_eq!(max, Point2::new(7.0, 7.0));
+    }
+
+    #[test]
+    fn test_point_distance() {
+        let entity = Entity::Point(Point2::new(0.0, 0.0));
+        assert!((entity.distance_to(&Point2::new(3.0, 4.0)) - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_line_distance() {
+        let entity = Entity::Line {
+            start: Point2::new(0.0, 0.0),
+            end: Point2::new(10.0, 0.0),
+        };
+        // Perpendicular distance
+        assert!((entity.distance_to(&Point2::new(5.0, 5.0)) - 5.0).abs() < 1e-6);
+        // Distance to endpoint (beyond)
+        assert!((entity.distance_to(&Point2::new(15.0, 0.0)) - 5.0).abs() < 1e-6);
+        // On the line
+        assert!(entity.distance_to(&Point2::new(5.0, 0.0)) < 1e-6);
+    }
+
+    #[test]
+    fn test_circle_distance() {
+        let entity = Entity::Circle {
+            center: Point2::new(0.0, 0.0),
+            radius: 5.0,
+        };
+        // Point on circle
+        assert!(entity.distance_to(&Point2::new(5.0, 0.0)) < 1e-6);
+        // Point outside
+        assert!((entity.distance_to(&Point2::new(10.0, 0.0)) - 5.0).abs() < 1e-6);
+        // Point inside
+        assert!((entity.distance_to(&Point2::new(0.0, 0.0)) - 5.0).abs() < 1e-6);
     }
 }

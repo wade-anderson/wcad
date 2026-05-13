@@ -28,6 +28,7 @@ pub struct AppState {
     pub entities: Vec<Entity>,
     pub active_tool: Tool,
     pub click_buffer: Vec<Point2<f64>>,
+    pub selected_indices: Vec<usize>,
 }
 
 pub fn build_ui(app: &Application) -> ApplicationWindow {
@@ -41,6 +42,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         entities: Vec::new(),
         active_tool: Tool::Select,
         click_buffer: Vec::new(),
+        selected_indices: Vec::new(),
     }));
 
     let main_layout = Box::builder()
@@ -78,6 +80,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let mut state = app_state_line.borrow_mut();
         state.active_tool = Tool::Line;
         state.click_buffer.clear();
+        state.selected_indices.clear();
     });
 
     let app_state_circle = app_state.clone();
@@ -85,6 +88,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let mut state = app_state_circle.borrow_mut();
         state.active_tool = Tool::Circle;
         state.click_buffer.clear();
+        state.selected_indices.clear();
     });
 
     main_layout.append(&toolbar);
@@ -131,7 +135,6 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         let mut state = view_state_motion.borrow_mut();
         state.cursor_pos = [x as f32, y as f32];
         
-        // Update status bar
         let world = pixel_to_world(
             x as f32, y as f32, 
             viewport_motion.width() as f32, viewport_motion.height() as f32, 
@@ -143,7 +146,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     });
     viewport.add_controller(motion_controller);
 
-    // Left Click Interaction (Tool Usage)
+    // Left Click Interaction (Tool Usage & Selection)
     let click_gesture = gtk4::GestureClick::new();
     let app_state_click = app_state.clone();
     let view_state_click = view_state.clone();
@@ -158,9 +161,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             view.offset, view.zoom
         );
 
+        use wcad_core::domain::Geometry;
+        let world_point = Point2::from(world_pos);
+
         match state.active_tool {
             Tool::Line => {
-                state.click_buffer.push(Point2::from(world_pos));
+                state.click_buffer.push(world_point);
                 if state.click_buffer.len() == 2 {
                     let line = Entity::Line { 
                         start: state.click_buffer[0], 
@@ -171,7 +177,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 }
             }
             Tool::Circle => {
-                state.click_buffer.push(Point2::from(world_pos));
+                state.click_buffer.push(world_point);
                 if state.click_buffer.len() == 2 {
                     let center = state.click_buffer[0];
                     let p2 = state.click_buffer[1];
@@ -182,7 +188,21 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 }
             }
             Tool::Select => {
-                // Future selection logic
+                let mut closest = None;
+                let mut min_dist = 0.02 / view.zoom as f64; // Adaptive selection threshold
+                
+                for (i, entity) in state.entities.iter().enumerate() {
+                    let dist = entity.distance_to(&world_point);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        closest = Some(i);
+                    }
+                }
+                
+                state.selected_indices.clear();
+                if let Some(index) = closest {
+                    state.selected_indices.push(index);
+                }
             }
         }
         viewport_click.queue_draw();
@@ -255,8 +275,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         
         renderer.update_view(view.offset, view.zoom, width as f32, height as f32);
 
-        let mut render_entities: Vec<(Entity, [f32; 3])> = app.entities.iter()
-            .map(|e| (e.clone(), [1.0, 1.0, 1.0])).collect();
+        let mut render_entities: Vec<(Entity, [f32; 3])> = app.entities.iter().enumerate()
+            .map(|(i, e)| {
+                let color = if app.selected_indices.contains(&i) {
+                    [1.0, 1.0, 0.0] // Yellow for selected
+                } else {
+                    [1.0, 1.0, 1.0] // White for others
+                };
+                (e.clone(), color)
+            }).collect();
 
         // Rubber-banding preview
         if !app.click_buffer.is_empty() {
