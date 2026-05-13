@@ -29,6 +29,51 @@ pub struct AppState {
     pub active_tool: Tool,
     pub click_buffer: Vec<Point2<f64>>,
     pub selected_indices: Vec<usize>,
+    pub undo_stack: Vec<Vec<Entity>>,
+    pub redo_stack: Vec<Vec<Entity>>,
+}
+
+impl AppState {
+    pub fn push_undo(&mut self) {
+        self.undo_stack.push(self.entities.clone());
+        self.redo_stack.clear();
+        // Limit stack size to 50
+        if self.undo_stack.len() > 50 {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(self.entities.clone());
+            self.entities = prev;
+            self.selected_indices.clear();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.entities.clone());
+            self.entities = next;
+            self.selected_indices.clear();
+        }
+    }
+
+    pub fn delete_selected(&mut self) {
+        if self.selected_indices.is_empty() {
+            return;
+        }
+        self.push_undo();
+        // Sort indices descending to avoid shifting issues during removal
+        let mut indices = self.selected_indices.clone();
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        for i in indices {
+            if i < self.entities.len() {
+                self.entities.remove(i);
+            }
+        }
+        self.selected_indices.clear();
+    }
 }
 
 pub fn build_ui(app: &Application) -> ApplicationWindow {
@@ -43,6 +88,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         active_tool: Tool::Select,
         click_buffer: Vec::new(),
         selected_indices: Vec::new(),
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     }));
 
     let main_layout = Box::builder()
@@ -109,6 +156,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .hexpand(true)
         .vexpand(true)
         .can_focus(true)
+        .focusable(true)
         .build();
 
     viewport_container.append(&viewport);
@@ -125,6 +173,39 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     viewport_container.append(&status_bar);
 
     main_layout.append(&viewport_container);
+
+    // Keyboard Shortcuts
+    let key_controller = gtk4::EventControllerKey::new();
+    let app_state_key = app_state.clone();
+    let viewport_key = viewport.clone();
+    key_controller.connect_key_pressed(move |_controller, key, _code, state| {
+        let mut app = app_state_key.borrow_mut();
+        let mut handled = false;
+
+        match key {
+            gtk4::gdk::Key::Delete => {
+                app.delete_selected();
+                handled = true;
+            }
+            gtk4::gdk::Key::z if state.contains(gtk4::gdk::ModifierType::CONTROL_MASK) => {
+                app.undo();
+                handled = true;
+            }
+            gtk4::gdk::Key::y if state.contains(gtk4::gdk::ModifierType::CONTROL_MASK) => {
+                app.redo();
+                handled = true;
+            }
+            _ => {}
+        }
+
+        if handled {
+            viewport_key.queue_draw();
+            gtk4::glib::Propagation::Stop
+        } else {
+            gtk4::glib::Propagation::Proceed
+        }
+    });
+    viewport.add_controller(key_controller);
 
     // Motion tracking
     let motion_controller = gtk4::EventControllerMotion::new();
@@ -152,6 +233,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let view_state_click = view_state.clone();
     let viewport_click = viewport.clone();
     click_gesture.connect_pressed(move |_gesture, _n_press, x, y| {
+        viewport_click.grab_focus();
         let mut state = app_state_click.borrow_mut();
         let view = view_state_click.borrow();
         
@@ -168,6 +250,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             Tool::Line => {
                 state.click_buffer.push(world_point);
                 if state.click_buffer.len() == 2 {
+                    state.push_undo();
                     let line = Entity::Line { 
                         start: state.click_buffer[0], 
                         end: state.click_buffer[1] 
@@ -179,6 +262,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             Tool::Circle => {
                 state.click_buffer.push(world_point);
                 if state.click_buffer.len() == 2 {
+                    state.push_undo();
                     let center = state.click_buffer[0];
                     let p2 = state.click_buffer[1];
                     let radius = ((center.x - p2.x).powi(2) + (center.y - p2.y).powi(2)).sqrt();
@@ -362,5 +446,61 @@ mod tests {
         // (Since total width at zoom 1.0 is 2.0 units for 1:1 aspect)
         let world = pixel_to_world(75.0, 50.0, 100.0, 100.0, [0.0, 0.0], 2.0);
         assert!((world[0] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_app_state_undo_redo() {
+        let mut state = AppState {
+            entities: Vec::new(),
+            active_tool: Tool::Select,
+            click_buffer: Vec::new(),
+            selected_indices: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        };
+
+        // Add an entity
+        state.push_undo();
+        state.entities.push(Entity::Point(Point2::new(0.0, 0.0)));
+        assert_eq!(state.entities.len(), 1);
+
+        // Undo
+        state.undo();
+        assert_eq!(state.entities.len(), 0);
+        assert_eq!(state.redo_stack.len(), 1);
+
+        // Redo
+        state.redo();
+        assert_eq!(state.entities.len(), 1);
+        assert_eq!(state.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn test_app_state_delete_selected() {
+        let mut state = AppState {
+            entities: vec![
+                Entity::Point(Point2::new(0.0, 0.0)),
+                Entity::Point(Point2::new(1.0, 1.0)),
+                Entity::Point(Point2::new(2.0, 2.0)),
+            ],
+            active_tool: Tool::Select,
+            click_buffer: Vec::new(),
+            selected_indices: vec![0, 2], // Select first and third
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        };
+
+        state.delete_selected();
+        assert_eq!(state.entities.len(), 1);
+        // The one at index 1 (Point(1,1)) should remain
+        if let Entity::Point(p) = &state.entities[0] {
+            assert_eq!(p.x, 1.0);
+        } else {
+            panic!("Wrong entity remains");
+        }
+
+        // Undo delete
+        state.undo();
+        assert_eq!(state.entities.len(), 3);
     }
 }
