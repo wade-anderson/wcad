@@ -1,0 +1,16 @@
+[package]
+name = "wcad-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+wcad-core = { path = "../wcad-core" }
+gtk4.workspace = true
+libadwaita.workspace = true
+wgpu.workspace = true
+lyon.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true

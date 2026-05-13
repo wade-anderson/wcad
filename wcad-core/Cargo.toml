@@ -1,0 +1,14 @@
+[package]
+name = "wcad-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+nalgebra.workspace = true
+rayon.workspace = true
+log.workspace = true

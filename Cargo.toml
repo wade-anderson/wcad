@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "wcad-core",
+    "wcad-ui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Antigravity <antigravity@google.com>"]
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+nalgebra = { version = "0.32", features = ["serde-serialize"] }
+rayon = "1.8"
+gtk4 = { version = "0.8", package = "gtk4", features = ["v4_12"] }
+libadwaita = "0.6"
+wgpu = "0.19"
+lyon = "1.0"
+log = "0.4"
+env_logger = "0.10"
