@@ -449,18 +449,84 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
 
             let app_val = app_state.borrow();
             
-            // Build Layers List
             for (idx, layer) in app_val.layers.iter().enumerate() {
                 let row = Box::builder()
                     .orientation(Orientation::Horizontal)
                     .spacing(6)
                     .build();
-                
-                let name_label = gtk4::Label::builder()
-                    .label(&layer.name)
+
+                let name_entry = gtk4::Entry::builder()
+                    .text(&layer.name)
                     .hexpand(true)
-                    .halign(gtk4::Align::Start)
+                    .valign(gtk4::Align::Center)
                     .build();
+                {
+                    let app_state = app_state.clone();
+                    let weak_cell = update_sidebar_weak.clone();
+                    let old_name = layer.name.clone();
+                    name_entry.connect_activate(move |entry| {
+                        let new_name = entry.text().to_string();
+                        if new_name.is_empty() || new_name == old_name { return; }
+                        let mut app = app_state.borrow_mut();
+                        app.push_undo();
+                        app.layers[idx].name = new_name.clone();
+                        for entity in &mut app.entities {
+                            if entity.layer == old_name {
+                                entity.layer = new_name.clone();
+                            }
+                        }
+                        drop(app);
+                        if let Some(weak) = weak_cell.borrow().as_ref() {
+                            if let Some(update) = weak.upgrade() { update(); }
+                        }
+                    });
+                }
+
+                let btn_up = Button::builder().icon_name("go-up-symbolic").build();
+                if idx == 0 { btn_up.set_sensitive(false); }
+                {
+                    let app_state = app_state.clone();
+                    let weak_cell = update_sidebar_weak.clone();
+                    btn_up.connect_clicked(move |_| {
+                        let mut app = app_state.borrow_mut();
+                        if idx > 0 {
+                            app.push_undo();
+                            app.layers.swap(idx, idx - 1);
+                            if app.active_layer_index == idx {
+                                app.active_layer_index = idx - 1;
+                            } else if app.active_layer_index == idx - 1 {
+                                app.active_layer_index = idx;
+                            }
+                            drop(app);
+                            if let Some(weak) = weak_cell.borrow().as_ref() {
+                                if let Some(update) = weak.upgrade() { update(); }
+                            }
+                        }
+                    });
+                }
+
+                let btn_down = Button::builder().icon_name("go-down-symbolic").build();
+                if idx == app_val.layers.len() - 1 { btn_down.set_sensitive(false); }
+                {
+                    let app_state = app_state.clone();
+                    let weak_cell = update_sidebar_weak.clone();
+                    btn_down.connect_clicked(move |_| {
+                        let mut app = app_state.borrow_mut();
+                        if idx < app.layers.len() - 1 {
+                            app.push_undo();
+                            app.layers.swap(idx, idx + 1);
+                            if app.active_layer_index == idx {
+                                app.active_layer_index = idx + 1;
+                            } else if app.active_layer_index == idx + 1 {
+                                app.active_layer_index = idx;
+                            }
+                            drop(app);
+                            if let Some(weak) = weak_cell.borrow().as_ref() {
+                                if let Some(update) = weak.upgrade() { update(); }
+                            }
+                        }
+                    });
+                }
                 
                 let is_active = idx == app_val.active_layer_index;
                 let active_indicator = gtk4::Image::from_icon_name(if is_active { "emblem-ok-symbolic" } else { "non-existent" });
@@ -505,7 +571,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                     });
                 }
 
-                row.append(&name_label);
+                row.append(&name_entry);
+                row.append(&btn_up);
+                row.append(&btn_down);
                 row.append(&btn_activate);
                 row.append(&btn_visible);
                 layers_container.append(&row);
@@ -1871,6 +1939,38 @@ mod tests {
         state.grid_enabled = false;
         let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
         assert!((snapped.x - 0.12).abs() < 1e-6); // No snapping
+    }
+
+    #[test]
+    fn test_layer_undo_redo() {
+        let mut state = AppState {
+            entities: Vec::new(),
+            layers: vec![Layer::new("0", [1.0, 1.0, 1.0]), Layer::new("1", [0.0, 1.0, 0.0])],
+            active_layer_index: 0,
+            active_tool: Tool::Select,
+            click_buffer: Vec::new(),
+            selected_indices: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            grid_size: 0.1,
+            grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
+        };
+
+        // Swap layers
+        state.push_undo();
+        state.layers.swap(0, 1);
+        state.active_layer_index = 1;
+        assert_eq!(state.layers[0].name, "1");
+
+        // Undo swap
+        state.undo();
+        assert_eq!(state.layers[0].name, "0");
+        assert_eq!(state.active_layer_index, 0);
+
+        // Redo swap
+        state.redo();
+        assert_eq!(state.layers[0].name, "1");
+        assert_eq!(state.active_layer_index, 1);
     }
 }
 
