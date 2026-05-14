@@ -1,5 +1,6 @@
 pub mod renderer;
 pub mod tessellator;
+pub mod printing;
 
 use libadwaita::prelude::*;
 use libadwaita::{Application, ApplicationWindow, HeaderBar};
@@ -325,12 +326,14 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_save = Button::with_label("Save");
     let btn_undo = Button::with_label("Undo");
     let btn_redo = Button::with_label("Redo");
+    let btn_print = Button::builder().icon_name("printer-symbolic").build();
 
     let header = HeaderBar::builder()
         .title_widget(&libadwaita::WindowTitle::new("WCAD", "2D Drafting for Linux"))
         .build();
     header.pack_start(&btn_open);
     header.pack_start(&btn_save);
+    header.pack_start(&btn_print);
     header.pack_end(&btn_redo);
     header.pack_end(&btn_undo);
 
@@ -1789,6 +1792,14 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .title("WCAD")
         .content(&main_layout)
         .build();
+
+    {
+        let app_state = app_state.clone();
+        let window = window.clone();
+        btn_print.connect_clicked(move |_| {
+            printing::show_print_dialog(&window, app_state.clone());
+        });
+    }
 
     window.present();
     window
