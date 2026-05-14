@@ -279,4 +279,18 @@ mod tests {
         // A circle with 64 segments should have many more vertices than a line
         assert!(vertices.len() > 10);
     }
+
+    #[test]
+    fn test_tessellate_rectangle() {
+        let entity = Entity::new(GeometryKind::Rectangle {
+            start: Point2::new(0.0, 0.0),
+            end: Point2::new(10.0, 5.0),
+        }, "0");
+        let entities = vec![(&entity, [1.0, 1.0, 1.0])];
+        let (vertices, indices) = tessellate_entities(&entities, 1.0, 800.0);
+        assert!(!vertices.is_empty());
+        assert!(!indices.is_empty());
+        // A rectangle stroke should have at least 8 vertices (4 corners, each with 2 vertices for stroke thickness)
+        assert!(vertices.len() >= 8);
+    }
 }

@@ -522,6 +522,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "X", p.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -529,11 +530,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Point(ref mut p) = app.entities[index].geometry { p.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Y", p.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -541,6 +546,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Point(ref mut p) = app.entities[index].geometry { p.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                     }
@@ -550,6 +558,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Start X", start.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -557,11 +566,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Start Y", start.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -569,11 +582,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "End X", end.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -581,11 +598,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "End Y", end.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -593,6 +614,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                     }
@@ -602,6 +626,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Center X", center.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -609,11 +634,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Center Y", center.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -621,11 +650,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Radius", *radius, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -633,6 +666,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Circle { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                     }
@@ -642,18 +678,23 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Start X", start.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
                                     if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
-                                }
-                                viewport.queue_draw();
-                            });
+                                 }
+                                 viewport.queue_draw();
+                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                     if let Some(update) = weak.upgrade() { update(); }
+                                 }
+                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Start Y", start.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -661,11 +702,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "End X", end.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -673,11 +718,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "End Y", end.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -685,6 +734,50 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
+                            });
+                        }
+
+                        let width = (end.x - start.x).abs();
+                        let height = (end.y - start.y).abs();
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
+                            append_f64_prop(&props_container, "Width", width, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { start, ref mut end } = app.entities[index].geometry {
+                                        let sign = if end.x >= start.x { 1.0 } else { -1.0 };
+                                        end.x = start.x + sign * val;
+                                    }
+                                }
+                                viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
+                            });
+                        }
+                        {
+                            let app_state = app_state.clone();
+                            let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
+                            append_f64_prop(&props_container, "Height", height, move |val| {
+                                {
+                                    let mut app = app_state.borrow_mut();
+                                    app.push_undo();
+                                    if let GeometryKind::Rectangle { start, ref mut end } = app.entities[index].geometry {
+                                        let sign = if end.y >= start.y { 1.0 } else { -1.0 };
+                                        end.y = start.y + sign * val;
+                                    }
+                                }
+                                viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                     }
@@ -694,6 +787,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Center X", center.x, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -701,11 +795,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Center Y", center.y, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -713,11 +811,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Radius", *radius, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -725,11 +827,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Arc { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Start Angle", *start_angle, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -737,11 +843,15 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Arc { ref mut start_angle, .. } = app.entities[index].geometry { *start_angle = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                         {
                             let app_state = app_state.clone();
                             let viewport = viewport.clone();
+                            let update_sidebar_weak = update_sidebar_weak.clone();
                             append_f64_prop(&props_container, "Sweep Angle", *sweep_angle, move |val| {
                                 {
                                     let mut app = app_state.borrow_mut();
@@ -749,6 +859,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                     if let GeometryKind::Arc { ref mut sweep_angle, .. } = app.entities[index].geometry { *sweep_angle = val; }
                                 }
                                 viewport.queue_draw();
+                                if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
+                                    if let Some(update) = weak.upgrade() { update(); }
+                                }
                             });
                         }
                     }
