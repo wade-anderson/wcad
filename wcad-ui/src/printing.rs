@@ -123,7 +123,7 @@ fn render_to_cairo(context: &gtk4::PrintContext, app: &AppState) {
 
 fn render_dim_to_cairo(cr: &gtk4::cairo::Context, dim: &DimensionKind, scale: f64) {
     match dim {
-        DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+        DimensionKind::Linear { p1, p2, p_line, horizontal, .. } => {
             let (p1_dim, p2_dim) = if *horizontal {
                 (nalgebra::Point2::new(p1.x, p_line.y), nalgebra::Point2::new(p2.x, p_line.y))
             } else {
@@ -150,7 +150,7 @@ fn render_dim_to_cairo(cr: &gtk4::cairo::Context, dim: &DimensionKind, scale: f6
             let (text, pos, angle) = dim.get_text_info();
             render_text(cr, &text, pos, angle, scale);
         }
-        DimensionKind::Aligned { p1, p2, p_line } => {
+        DimensionKind::Aligned { p1, p2, p_line, .. } => {
             let dir = (p2 - p1).normalize();
             let normal = nalgebra::Vector2::new(-dir.y, dir.x);
             let offset = (p_line - p1).dot(&normal);
@@ -173,7 +173,7 @@ fn render_dim_to_cairo(cr: &gtk4::cairo::Context, dim: &DimensionKind, scale: f6
             let (text, pos, angle) = dim.get_text_info();
             render_text(cr, &text, pos, angle, scale);
         }
-        DimensionKind::Radial { center, point, p_text } => {
+        DimensionKind::Radial { center, point, p_text, .. } => {
             cr.move_to(center.x, center.y); cr.line_to(point.x, point.y);
             cr.line_to(p_text.x, p_text.y);
             let _ = cr.stroke();

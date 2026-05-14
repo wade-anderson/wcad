@@ -37,6 +37,7 @@ pub struct UndoState {
     pub entities: Vec<Entity>,
     pub layers: Vec<Layer>,
     pub active_layer_index: usize,
+    pub next_entity_id: u64,
 }
 
 pub struct AppState {
@@ -44,7 +45,7 @@ pub struct AppState {
     pub layers: Vec<Layer>,
     pub active_layer_index: usize,
     pub active_tool: Tool,
-    pub click_buffer: Vec<Point2<f64>>,
+    pub click_buffer: Vec<(Point2<f64>, Option<wcad_core::domain::DimensionAnchor>)>,
     pub selected_indices: Vec<usize>,
     pub undo_stack: Vec<UndoState>,
     pub redo_stack: Vec<UndoState>,
@@ -53,6 +54,7 @@ pub struct AppState {
     pub grid_factor: f64,
     pub grid_auto: bool,
     pub mouse_world_pos: Point2<f64>,
+    pub next_entity_id: u64,
 }
 
 impl AppState {
@@ -61,6 +63,7 @@ impl AppState {
             entities: self.entities.clone(),
             layers: self.layers.clone(),
             active_layer_index: self.active_layer_index,
+            next_entity_id: self.next_entity_id,
         });
         self.redo_stack.clear();
         if self.undo_stack.len() > 50 {
@@ -74,10 +77,12 @@ impl AppState {
                 entities: self.entities.clone(),
                 layers: self.layers.clone(),
                 active_layer_index: self.active_layer_index,
+                next_entity_id: self.next_entity_id,
             });
             self.entities = prev.entities;
             self.layers = prev.layers;
             self.active_layer_index = prev.active_layer_index;
+            self.next_entity_id = prev.next_entity_id;
             self.selected_indices.clear();
         }
     }
@@ -88,10 +93,12 @@ impl AppState {
                 entities: self.entities.clone(),
                 layers: self.layers.clone(),
                 active_layer_index: self.active_layer_index,
+                next_entity_id: self.next_entity_id,
             });
             self.entities = next.entities;
             self.layers = next.layers;
             self.active_layer_index = next.active_layer_index;
+            self.next_entity_id = next.next_entity_id;
             self.selected_indices.clear();
         }
     }
@@ -112,23 +119,135 @@ impl AppState {
         self.selected_indices.clear();
     }
 
-    pub fn snap_point(&self, point: Point2<f64>, zoom: f32) -> Point2<f64> {
-        let mut snapped = point;
-        let mut best_dist = 0.02 / zoom as f64; // Snap threshold
+    pub fn next_id(&mut self) -> u64 {
+        let id = self.next_entity_id;
+        self.next_entity_id += 1;
+        id
+    }
 
-        // Snap to endpoints
+    pub fn sync_associative_dimensions(&mut self, changed_id: u64) {
+        let changed_geom = if let Some(e) = self.entities.iter().find(|e| e.id == changed_id) {
+            e.geometry.clone()
+        } else {
+            return;
+        };
+
+        fn get_point_from_geom(geom: &GeometryKind, index: usize) -> Point2<f64> {
+            match geom {
+                GeometryKind::Point(p) => *p,
+                GeometryKind::Line { start, end } => if index == 0 { *start } else { *end },
+                GeometryKind::Rectangle { start, end } => {
+                    match index {
+                        0 => *start,
+                        1 => *end,
+                        2 => Point2::new(end.x, start.y),
+                        3 => Point2::new(start.x, end.y),
+                        _ => *start,
+                    }
+                }
+                GeometryKind::Polyline(points) => {
+                    points.get(index).cloned().unwrap_or_else(|| points.last().cloned().unwrap_or(Point2::new(0.0, 0.0)))
+                }
+                GeometryKind::Circle { center, .. } => *center,
+                GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
+                    match index {
+                        0 => *center,
+                        1 => center + nalgebra::Vector2::new(start_angle.cos() * radius, start_angle.sin() * radius),
+                        2 => center + nalgebra::Vector2::new((start_angle + sweep_angle).cos() * radius, (start_angle + sweep_angle).sin() * radius),
+                        _ => *center,
+                    }
+                },
+                _ => Point2::new(0.0, 0.0),
+            }
+        }
+
+        for e in &mut self.entities {
+            if let GeometryKind::Dimension(ref mut dim) = e.geometry {
+                match dim {
+                    DimensionKind::Linear { p1, p2, p1_anchor, p2_anchor, .. } => {
+                        if let Some(anchor) = p1_anchor {
+                            if anchor.entity_id == changed_id {
+                                *p1 = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                        if let Some(anchor) = p2_anchor {
+                            if anchor.entity_id == changed_id {
+                                *p2 = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                    }
+                    DimensionKind::Aligned { p1, p2, p1_anchor, p2_anchor, .. } => {
+                        if let Some(anchor) = p1_anchor {
+                            if anchor.entity_id == changed_id {
+                                *p1 = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                        if let Some(anchor) = p2_anchor {
+                            if anchor.entity_id == changed_id {
+                                *p2 = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                    }
+                    DimensionKind::Radial { center, point, center_anchor, point_anchor, .. } => {
+                        if let Some(anchor) = center_anchor {
+                            if anchor.entity_id == changed_id {
+                                *center = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                        if let Some(anchor) = point_anchor {
+                            if anchor.entity_id == changed_id {
+                                *point = get_point_from_geom(&changed_geom, anchor.point_index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn snap_to_point(&self, point: &Point2<f64>, zoom: f32) -> (Point2<f64>, Option<wcad_core::domain::DimensionAnchor>) {
+        let mut best_dist = 0.02 / zoom as f64;
+        let mut snapped = *point;
+        let mut anchor = None;
+
         for entity in &self.entities {
             match &entity.geometry {
+                GeometryKind::Point(p) => {
+                    let d = (p - point).norm();
+                    if d < best_dist {
+                        best_dist = d;
+                        snapped = *p;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 0 });
+                    }
+                }
                 GeometryKind::Line { start, end } => {
                     let d1 = (start - point).norm();
                     if d1 < best_dist {
                         best_dist = d1;
                         snapped = *start;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 0 });
                     }
                     let d2 = (end - point).norm();
                     if d2 < best_dist {
                         best_dist = d2;
                         snapped = *end;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 1 });
+                    }
+                }
+                GeometryKind::Rectangle { start, end } => {
+                    let corners = [
+                        (*start, 0),
+                        (*end, 1),
+                        (Point2::new(end.x, start.y), 2),
+                        (Point2::new(start.x, end.y), 3),
+                    ];
+                    for (p, idx) in corners {
+                        let d = (p - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = p;
+                            anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: idx });
+                        }
                     }
                 }
                 GeometryKind::Circle { center, .. } => {
@@ -136,50 +255,38 @@ impl AppState {
                     if d < best_dist {
                         best_dist = d;
                         snapped = *center;
-                    }
-                }
-                GeometryKind::Rectangle { start, end } => {
-                    let corners = [
-                        *start,
-                        Point2::new(end.x, start.y),
-                        *end,
-                        Point2::new(start.x, end.y),
-                    ];
-                    for c in corners {
-                        let d = (c - point).norm();
-                        if d < best_dist {
-                            best_dist = d;
-                            snapped = c;
-                        }
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 0 });
                     }
                 }
                 GeometryKind::Arc { center, radius, start_angle, sweep_angle } => {
-                    // Snap to center
                     let d_c = (center - point).norm();
                     if d_c < best_dist {
                         best_dist = d_c;
                         snapped = *center;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 0 });
                     }
-                    // Snap to endpoints
                     let p1 = center + nalgebra::Vector2::new(start_angle.cos() * radius, start_angle.sin() * radius);
                     let p2 = center + nalgebra::Vector2::new((start_angle + sweep_angle).cos() * radius, (start_angle + sweep_angle).sin() * radius);
                     let d1 = (p1 - point).norm();
                     if d1 < best_dist {
                         best_dist = d1;
                         snapped = p1;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 1 });
                     }
                     let d2 = (p2 - point).norm();
                     if d2 < best_dist {
                         best_dist = d2;
                         snapped = p2;
+                        anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: 2 });
                     }
                 }
                 GeometryKind::Polyline(points) => {
-                    for p in points {
+                    for (i, p) in points.iter().enumerate() {
                         let d = (p - point).norm();
                         if d < best_dist {
                             best_dist = d;
                             snapped = *p;
+                            anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: i });
                         }
                     }
                 }
@@ -187,7 +294,6 @@ impl AppState {
             }
         }
 
-        // Snap to grid if enabled and no endpoint found
         if self.grid_enabled && best_dist >= 0.02 / zoom as f64 {
             let multiplier = if self.grid_factor >= 0.0 {
                 1.0 + self.grid_factor
@@ -198,9 +304,10 @@ impl AppState {
             let x = (point.x / grid_size).round() * grid_size;
             let y = (point.y / grid_size).round() * grid_size;
             snapped = Point2::new(x, y);
+            anchor = None;
         }
 
-        snapped
+        (snapped, anchor)
     }
 }
 
@@ -225,6 +332,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         grid_factor: 0.0,
         grid_auto: true,
         mouse_world_pos: Point2::new(0.0, 0.0),
+        next_entity_id: 1,
     }));
 
     let main_layout = Box::builder()
@@ -634,7 +742,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -650,7 +760,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Line { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -666,7 +778,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -682,7 +796,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Line { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -702,7 +818,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -718,7 +836,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Circle { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -734,7 +854,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Circle { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -754,7 +876,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.x = val; }
+                                    app.sync_associative_dimensions(id);
                                  }
                                  viewport.queue_draw();
                                  if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -770,7 +894,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { ref mut start, .. } = app.entities[index].geometry { start.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -786,7 +912,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.x = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -802,7 +930,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { ref mut end, .. } = app.entities[index].geometry { end.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -821,10 +951,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { start, ref mut end } = app.entities[index].geometry {
                                         let sign = if end.x >= start.x { 1.0 } else { -1.0 };
                                         end.x = start.x + sign * val;
                                     }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -840,10 +972,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Rectangle { start, ref mut end } = app.entities[index].geometry {
                                         let sign = if end.y >= start.y { 1.0 } else { -1.0 };
                                         end.y = start.y + sign * val;
                                     }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -863,7 +997,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.x = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -879,7 +1015,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Arc { ref mut center, .. } = app.entities[index].geometry { center.y = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -895,7 +1033,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Arc { ref mut radius, .. } = app.entities[index].geometry { *radius = val.max(0.0); }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -911,7 +1051,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Arc { ref mut start_angle, .. } = app.entities[index].geometry { *start_angle = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -927,7 +1069,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                                 {
                                     let mut app = app_state.borrow_mut();
                                     app.push_undo();
+                                    let id = app.entities[index].id;
                                     if let GeometryKind::Arc { ref mut sweep_angle, .. } = app.entities[index].geometry { *sweep_angle = val; }
+                                    app.sync_associative_dimensions(id);
                                 }
                                 viewport.queue_draw();
                                 if let Some(weak) = update_sidebar_weak.borrow().as_ref() {
@@ -956,7 +1100,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 let snapped = app.mouse_world_pos;
                 match app.active_tool {
                     Tool::Line => {
-                        let start = app.click_buffer[0];
+                        let (start, _) = app.click_buffer[0];
                         let dist = (snapped - start).norm();
                         let angle = (snapped.y - start.y).atan2(snapped.x - start.x).to_degrees();
                         props_container.append(&libadwaita::ActionRow::builder().title("Type: Line (Preview)").build());
@@ -964,13 +1108,13 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         props_container.append(&libadwaita::ActionRow::builder().title(&format!("Angle: {:.1}°", angle)).build());
                     }
                     Tool::Circle => {
-                        let center = app.click_buffer[0];
+                        let (center, _) = app.click_buffer[0];
                         let radius = (snapped - center).norm();
                         props_container.append(&libadwaita::ActionRow::builder().title("Type: Circle (Preview)").build());
                         props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
                     }
                     Tool::Rectangle => {
-                        let start = app.click_buffer[0];
+                        let (start, _) = app.click_buffer[0];
                         let w = (snapped.x - start.x).abs();
                         let h = (snapped.y - start.y).abs();
                         props_container.append(&libadwaita::ActionRow::builder().title("Type: Rect (Preview)").build());
@@ -978,13 +1122,13 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         props_container.append(&libadwaita::ActionRow::builder().title(&format!("Height: {:.3}", h)).build());
                     }
                     Tool::Arc => {
-                        let center = app.click_buffer[0];
+                        let (center, _) = app.click_buffer[0];
                         props_container.append(&libadwaita::ActionRow::builder().title("Type: Arc (Preview)").build());
                         if app.click_buffer.len() == 1 {
                             let radius = (snapped - center).norm();
                             props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
                         } else if app.click_buffer.len() == 2 {
-                            let p1 = app.click_buffer[1];
+                            let (p1, _) = app.click_buffer[1];
                             let radius = (p1 - center).norm();
                             let start_angle = (p1.y - center.y).atan2(p1.x - center.x).to_degrees();
                             let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x).to_degrees();
@@ -995,34 +1139,34 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                     }
                     Tool::DimLinear => {
                         if app.click_buffer.len() == 2 {
-                            let p1 = app.click_buffer[0];
-                            let p2 = app.click_buffer[1];
+                            let (p1, _) = app.click_buffer[0];
+                            let (p2, _) = app.click_buffer[1];
                             let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
                             let val = if horizontal { (p2.x - p1.x).abs() } else { (p2.y - p1.y).abs() };
                             props_container.append(&libadwaita::ActionRow::builder().title("Type: Linear Dim (Preview)").build());
-                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Distance: {:.3}", val)).build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Value: {:.3}", val)).build());
                         }
                     }
                     Tool::DimAligned => {
                         if app.click_buffer.len() == 2 {
-                            let p1 = app.click_buffer[0];
-                            let p2 = app.click_buffer[1];
-                            let dist = (p2 - p1).norm();
+                            let (p1, _) = app.click_buffer[0];
+                            let (p2, _) = app.click_buffer[1];
+                            let val = ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt();
                             props_container.append(&libadwaita::ActionRow::builder().title("Type: Aligned Dim (Preview)").build());
-                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Distance: {:.3}", dist)).build());
+                            props_container.append(&libadwaita::ActionRow::builder().title(&format!("Value: {:.3}", val)).build());
                         }
                     }
                     Tool::DimRadial => {
                         if app.click_buffer.len() == 2 {
-                            let center = app.click_buffer[0];
-                            let point = app.click_buffer[1];
+                            let (center, _) = app.click_buffer[0];
+                            let (point, _) = app.click_buffer[1];
                             let radius = (point - center).norm();
                             props_container.append(&libadwaita::ActionRow::builder().title("Type: Radial Dim (Preview)").build());
                             props_container.append(&libadwaita::ActionRow::builder().title(&format!("Radius: {:.3}", radius)).build());
                         }
                     }
                     Tool::Polyline => {
-                        let mut pts = app.click_buffer.clone();
+                        let mut pts: Vec<Point2<f64>> = app.click_buffer.iter().map(|(p, _)| *p).collect();
                         pts.push(snapped);
                         props_container.append(&libadwaita::ActionRow::builder().title(&format!("Type: Polyline (Preview - {} pts)", pts.len())).build());
                         if pts.len() >= 2 {
@@ -1277,7 +1421,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
                     app.push_undo();
                     let layer_name = app.layers[app.active_layer_index].name.clone();
-                    let poly = Entity::new(GeometryKind::Polyline(app.click_buffer.clone()), &layer_name);
+                    let pts: Vec<Point2<f64>> = app.click_buffer.iter().map(|(p, _)| *p).collect();
+                    let id = app.next_id();
+                    let poly = Entity::new(id, GeometryKind::Polyline(pts), &layer_name);
                     app.entities.push(poly);
                     app.click_buffer.clear();
                     handled = true;
@@ -1329,7 +1475,7 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             view.offset, view.zoom
         );
         let world_point = Point2::from(world);
-        let snapped = app.snap_point(world_point, view.zoom);
+        let (snapped, _) = app.snap_to_point(&world_point, view.zoom);
         app.mouse_world_pos = snapped;
         
         status_bar_motion.set_label(&format!("X: {:.3}, Y: {:.3}", snapped.x, snapped.y));
@@ -1366,67 +1512,72 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
             );
 
             let world_point = Point2::from(world_pos);
-            let snapped = app.snap_point(world_point, view.zoom);
+            let (snapped, anchor) = app.snap_to_point(&world_point, view.zoom);
 
             match app.active_tool {
                 Tool::Point => {
                     app.push_undo();
                     let layer_name = app.layers[app.active_layer_index].name.clone();
-                    app.entities.push(Entity::new(GeometryKind::Point(snapped), &layer_name));
+                    let id = app.next_id();
+                    app.entities.push(Entity::new(id, GeometryKind::Point(snapped), &layer_name));
                 }
                 Tool::Line => {
                     if app.click_buffer.is_empty() {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let start = app.click_buffer[0];
+                        let (start, _) = app.click_buffer[0];
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Line { start, end: snapped }, &layer_name));
+                        let id = app.next_id();
+                        app.entities.push(Entity::new(id, GeometryKind::Line { start, end: snapped }, &layer_name));
                         app.click_buffer.clear();
                     }
                 }
                 Tool::Circle => {
                     if app.click_buffer.is_empty() {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let center = app.click_buffer[0];
+                        let (center, _) = app.click_buffer[0];
                         let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Circle { center, radius }, &layer_name));
+                        let id = app.next_id();
+                        app.entities.push(Entity::new(id, GeometryKind::Circle { center, radius }, &layer_name));
                         app.click_buffer.clear();
                     }
                 }
                 Tool::Rectangle => {
                     if app.click_buffer.is_empty() {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let start = app.click_buffer[0];
+                        let (start, _) = app.click_buffer[0];
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Rectangle { start, end: snapped }, &layer_name));
+                        let id = app.next_id();
+                        app.entities.push(Entity::new(id, GeometryKind::Rectangle { start, end: snapped }, &layer_name));
                         app.click_buffer.clear();
                     }
                 }
                 Tool::Arc => {
                     if app.click_buffer.len() < 2 {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let center = app.click_buffer[0];
-                        let p1 = app.click_buffer[1];
+                        let (center, _) = app.click_buffer[0];
+                        let (p1, _) = app.click_buffer[1];
                         let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
                         let start_angle = (p1.y - center.y).atan2(p1.x - center.x);
                         let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
                         let mut sweep_angle = end_angle - start_angle;
                         if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, &layer_name));
+                        let id = app.next_id();
+                        app.entities.push(Entity::new(id, GeometryKind::Arc { center, radius, start_angle, sweep_angle }, &layer_name));
                         app.click_buffer.clear();
                     }
                 }
                 Tool::Polyline => {
-                    app.click_buffer.push(snapped);
+                    app.click_buffer.push((snapped, anchor));
                 }
                 Tool::Select => {
                     let mut closest = None;
@@ -1445,41 +1596,49 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                         app.selected_indices.push(index);
                     }
                 }
-                Tool::DimLinear => {
+                Tool::DimLinear | Tool::DimAligned => {
                     if app.click_buffer.len() < 2 {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let p1 = app.click_buffer[0];
-                        let p2 = app.click_buffer[1];
-                        // Determine orientation based on mouse distance from p1
-                        let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
+                        let (p1, p1_anchor) = app.click_buffer[0].clone();
+                        let (p2, p2_anchor) = app.click_buffer[1].clone();
+                        let p_line = snapped;
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line: snapped, horizontal }), &layer_name));
-                        app.click_buffer.clear();
-                    }
-                }
-                Tool::DimAligned => {
-                    if app.click_buffer.len() < 2 {
-                        app.click_buffer.push(snapped);
-                    } else {
-                        app.push_undo();
-                        let p1 = app.click_buffer[0];
-                        let p2 = app.click_buffer[1];
-                        let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Aligned { p1, p2, p_line: snapped }), &layer_name));
+                        let id = app.next_id();
+                        
+                        let dim = if app.active_tool == Tool::DimLinear {
+                            let horizontal = (p_line.x - p1.x).abs() < (p_line.y - p1.y).abs();
+                            GeometryKind::Dimension(DimensionKind::Linear { 
+                                p1, p2, p_line, horizontal,
+                                p1_anchor, p2_anchor 
+                            })
+                        } else {
+                            GeometryKind::Dimension(DimensionKind::Aligned { 
+                                p1, p2, p_line,
+                                p1_anchor, p2_anchor 
+                            })
+                        };
+                        
+                        app.entities.push(Entity::new(id, dim, &layer_name));
                         app.click_buffer.clear();
                     }
                 }
                 Tool::DimRadial => {
                     if app.click_buffer.len() < 2 {
-                        app.click_buffer.push(snapped);
+                        app.click_buffer.push((snapped, anchor));
                     } else {
                         app.push_undo();
-                        let center = app.click_buffer[0];
-                        let point = app.click_buffer[1];
+                        let (center, center_anchor) = app.click_buffer[0].clone();
+                        let (point, point_anchor) = app.click_buffer[1].clone();
+                        let p_text = snapped;
                         let layer_name = app.layers[app.active_layer_index].name.clone();
-                        app.entities.push(Entity::new(GeometryKind::Dimension(DimensionKind::Radial { center, point, p_text: snapped }), &layer_name));
+                        let id = app.next_id();
+                        
+                        app.entities.push(Entity::new(id, GeometryKind::Dimension(DimensionKind::Radial { 
+                            center, point, p_text,
+                            center_anchor, point_anchor 
+                        }), &layer_name));
                         app.click_buffer.clear();
                     }
                 }
@@ -1500,7 +1659,9 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         if app.active_tool == Tool::Polyline && app.click_buffer.len() >= 2 {
             app.push_undo();
             let layer_name = app.layers[app.active_layer_index].name.clone();
-            let poly = Entity::new(GeometryKind::Polyline(app.click_buffer.clone()), &layer_name);
+            let pts: Vec<Point2<f64>> = app.click_buffer.iter().map(|(p, _)| *p).collect();
+            let id = app.next_id();
+            let poly = Entity::new(id, GeometryKind::Polyline(pts), &layer_name);
             app.entities.push(poly);
             app.click_buffer.clear();
         } else {
@@ -1635,12 +1796,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                 // Vertical lines
                 for i in 0..=x_steps {
                     let x = start_x + i as f64 * grid_size;
-                    render_entities.push((Entity::new(GeometryKind::Line { start: Point2::new(x, start_y), end: Point2::new(x, end_y) }, "grid"), grid_color));
+                    render_entities.push((Entity::new(0, GeometryKind::Line { start: Point2::new(x, start_y), end: Point2::new(x, end_y) }, "grid"), grid_color));
                 }
                 // Horizontal lines
                 for j in 0..=y_steps {
                     let y = start_y + j as f64 * grid_size;
-                    render_entities.push((Entity::new(GeometryKind::Line { start: Point2::new(start_x, y), end: Point2::new(end_x, y) }, "grid"), grid_color));
+                    render_entities.push((Entity::new(0, GeometryKind::Line { start: Point2::new(start_x, y), end: Point2::new(end_x, y) }, "grid"), grid_color));
                 }
             }
         }
@@ -1661,70 +1822,70 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         // Rubber-banding & Snap Preview
         let mouse_world = pixel_to_world(view.cursor_pos[0], view.cursor_pos[1], width as f32, height as f32, view.offset, view.zoom);
         let mouse_point = Point2::from(mouse_world);
-        let snapped = app.snap_point(mouse_point, view.zoom);
+        let (snapped, _) = app.snap_to_point(&mouse_point, view.zoom);
 
         if app.active_tool != Tool::Select {
-            render_entities.push((Entity::new(GeometryKind::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, "preview"), [1.0, 0.0, 1.0])); // Magenta snap
+            render_entities.push((Entity::new(0, GeometryKind::Circle { center: snapped, radius: 0.005 / view.zoom as f64 }, "preview"), [1.0, 0.0, 1.0])); // Magenta snap
         }
 
         if !app.click_buffer.is_empty() {
             match app.active_tool {
                 Tool::Line => {
-                    render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0])); // Magenta preview
+                    render_entities.push((Entity::new(0, GeometryKind::Line { start: app.click_buffer[0].0, end: snapped }, "preview"), [1.0, 0.0, 1.0])); // Magenta preview
                 }
                 Tool::Circle => {
-                    let center = app.click_buffer[0];
+                    let center = app.click_buffer[0].0;
                     let radius = ((center.x - snapped.x).powi(2) + (center.y - snapped.y).powi(2)).sqrt();
-                    render_entities.push((Entity::new(GeometryKind::Circle { center, radius }, "preview"), [1.0, 0.0, 1.0]));
+                    render_entities.push((Entity::new(0, GeometryKind::Circle { center, radius }, "preview"), [1.0, 0.0, 1.0]));
                 }
                 Tool::Rectangle => {
-                    render_entities.push((Entity::new(GeometryKind::Rectangle { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                    render_entities.push((Entity::new(0, GeometryKind::Rectangle { start: app.click_buffer[0].0, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                 }
                 Tool::Arc => {
-                    let center = app.click_buffer[0];
+                    let center = app.click_buffer[0].0;
                     if app.click_buffer.len() == 1 {
-                        render_entities.push((Entity::new(GeometryKind::Line { start: center, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Line { start: center, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                     } else if app.click_buffer.len() == 2 {
-                        let p1 = app.click_buffer[1];
+                        let p1 = app.click_buffer[1].0;
                         let radius = ((center.x - p1.x).powi(2) + (center.y - p1.y).powi(2)).sqrt();
                         let start_angle = (p1.y - center.y).atan2(p1.x - center.x);
                         let end_angle = (snapped.y - center.y).atan2(snapped.x - center.x);
                         let mut sweep_angle = end_angle - start_angle;
                         if sweep_angle < 0.0 { sweep_angle += 2.0 * std::f64::consts::PI; }
-                        render_entities.push((Entity::new(GeometryKind::Arc { center, radius, start_angle, sweep_angle }, "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Arc { center, radius, start_angle, sweep_angle }, "preview"), [1.0, 0.0, 1.0]));
                     }
                 }
                 Tool::Polyline => {
-                    let mut pts = app.click_buffer.clone();
+                    let mut pts: Vec<Point2<f64>> = app.click_buffer.iter().map(|(p, _)| *p).collect();
                     pts.push(snapped);
-                    render_entities.push((Entity::new(GeometryKind::Polyline(pts), "preview"), [1.0, 0.0, 1.0]));
+                    render_entities.push((Entity::new(0, GeometryKind::Polyline(pts), "preview"), [1.0, 0.0, 1.0]));
                 }
                 Tool::DimLinear => {
                     if app.click_buffer.len() == 1 {
-                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Line { start: app.click_buffer[0].0, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                     } else if app.click_buffer.len() == 2 {
-                        let p1 = app.click_buffer[0];
-                        let p2 = app.click_buffer[1];
+                        let p1 = app.click_buffer[0].0;
+                        let p2 = app.click_buffer[1].0;
                         let horizontal = (snapped.x - p1.x).abs() < (snapped.y - p1.y).abs();
-                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line: snapped, horizontal }), "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line: snapped, horizontal, p1_anchor: None, p2_anchor: None }), "preview"), [1.0, 0.0, 1.0]));
                     }
                 }
                 Tool::DimAligned => {
                     if app.click_buffer.len() == 1 {
-                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Line { start: app.click_buffer[0].0, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                     } else if app.click_buffer.len() == 2 {
-                        let p1 = app.click_buffer[0];
-                        let p2 = app.click_buffer[1];
-                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Aligned { p1, p2, p_line: snapped }), "preview"), [1.0, 0.0, 1.0]));
+                        let p1 = app.click_buffer[0].0;
+                        let p2 = app.click_buffer[1].0;
+                        render_entities.push((Entity::new(0, GeometryKind::Dimension(DimensionKind::Aligned { p1, p2, p_line: snapped, p1_anchor: None, p2_anchor: None }), "preview"), [1.0, 0.0, 1.0]));
                     }
                 }
                 Tool::DimRadial => {
                     if app.click_buffer.len() == 1 {
-                        render_entities.push((Entity::new(GeometryKind::Line { start: app.click_buffer[0], end: snapped }, "preview"), [1.0, 0.0, 1.0]));
+                        render_entities.push((Entity::new(0, GeometryKind::Line { start: app.click_buffer[0].0, end: snapped }, "preview"), [1.0, 0.0, 1.0]));
                     } else if app.click_buffer.len() == 2 {
-                        let center = app.click_buffer[0];
-                        let point = app.click_buffer[1];
-                        render_entities.push((Entity::new(GeometryKind::Dimension(DimensionKind::Radial { center, point, p_text: snapped }), "preview"), [1.0, 0.0, 1.0]));
+                        let center = app.click_buffer[0].0;
+                        let point = app.click_buffer[1].0;
+                        render_entities.push((Entity::new(0, GeometryKind::Dimension(DimensionKind::Radial { center, point, p_text: snapped, center_anchor: None, point_anchor: None }), "preview"), [1.0, 0.0, 1.0]));
                     }
                 }
                 _ => {}
@@ -1860,11 +2021,13 @@ mod tests {
             redo_stack: Vec::new(),
             grid_size: 0.1,
             grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            next_entity_id: 1,
         };
 
         // Add an entity
         state.push_undo();
-        state.entities.push(Entity::new(GeometryKind::Point(Point2::new(0.0, 0.0)), "0"));
+        let id = state.next_id();
+        state.entities.push(Entity::new(id, GeometryKind::Point(Point2::new(0.0, 0.0)), "0"));
         assert_eq!(state.entities.len(), 1);
 
         // Undo
@@ -1882,9 +2045,9 @@ mod tests {
     fn test_app_state_delete_selected() {
         let mut state = AppState {
             entities: vec![
-                Entity::new(GeometryKind::Point(Point2::new(0.0, 0.0)), "0"),
-                Entity::new(GeometryKind::Point(Point2::new(1.0, 1.0)), "0"),
-                Entity::new(GeometryKind::Point(Point2::new(2.0, 2.0)), "0"),
+                Entity::new(1, GeometryKind::Point(Point2::new(0.0, 0.0)), "0"),
+                Entity::new(2, GeometryKind::Point(Point2::new(1.0, 1.0)), "0"),
+                Entity::new(3, GeometryKind::Point(Point2::new(2.0, 2.0)), "0"),
             ],
             layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
             active_layer_index: 0,
@@ -1895,6 +2058,7 @@ mod tests {
             redo_stack: Vec::new(),
             grid_size: 0.1,
             grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            next_entity_id: 4,
         };
 
         state.delete_selected();
@@ -1915,10 +2079,11 @@ mod tests {
     fn test_app_state_snap_point() {
         let mut state = AppState {
             entities: vec![
-                Entity::new(GeometryKind::Line {
+                Entity::new(1, GeometryKind::Line {
                     start: Point2::new(0.0, 0.0),
                     end: Point2::new(1.0, 0.0),
-                }, "0")
+                }, "0"),
+                Entity::new(2, GeometryKind::Circle { center: Point2::new(0.5, 0.5), radius: 0.1 }, "0"),
             ],
             layers: vec![Layer::new("0", [1.0, 1.0, 1.0])],
             active_layer_index: 0,
@@ -1929,26 +2094,24 @@ mod tests {
             redo_stack: Vec::new(),
             grid_size: 0.1,
             grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            next_entity_id: 3,
         };
 
         // Snap to endpoint (0,0) - within 0.02 threshold
-        let snapped = state.snap_point(Point2::new(0.01, 0.01), 1.0);
-        assert_eq!(snapped, Point2::new(0.0, 0.0));
+        let (snapped, anchor) = state.snap_to_point(&Point2::new(0.01, 0.01), 1.0);
+        assert!((snapped.x - 0.0).abs() < 1e-6);
+        assert_eq!(anchor.unwrap().entity_id, 1);
 
         // Snap to grid (0.1, 0.1) - far from endpoints but grid enabled
-        let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
+        state.grid_enabled = true;
+        let (snapped, anchor) = state.snap_to_point(&Point2::new(0.12, 0.08), 1.0);
         assert!((snapped.x - 0.1).abs() < 1e-6);
         assert!((snapped.y - 0.1).abs() < 1e-6);
-
-        // Snap to endpoint takes priority over grid
-        // Endpoint at (0,0), Grid at (0.01, 0.01) - not a grid point but let's say (0,0) is also a grid point
-        // If we click at (0.01, 0.0), it should snap to endpoint (0,0)
-        let snapped = state.snap_point(Point2::new(0.01, 0.0), 1.0);
-        assert_eq!(snapped, Point2::new(0.0, 0.0));
+        assert!(anchor.is_none());
 
         // Grid snap disabled
         state.grid_enabled = false;
-        let snapped = state.snap_point(Point2::new(0.12, 0.08), 1.0);
+        let (snapped, _) = state.snap_to_point(&Point2::new(0.12, 0.08), 1.0);
         assert!((snapped.x - 0.12).abs() < 1e-6); // No snapping
     }
 
@@ -1965,6 +2128,7 @@ mod tests {
             redo_stack: Vec::new(),
             grid_size: 0.1,
             grid_enabled: true, grid_factor: 0.0, grid_auto: true, mouse_world_pos: Point2::new(0.0, 0.0),
+            next_entity_id: 1,
         };
 
         // Swap layers

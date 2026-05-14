@@ -1,7 +1,7 @@
 use nalgebra::Point2;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GeometryKind {
     Point(Point2<f64>),
     Line { start: Point2<f64>, end: Point2<f64> },
@@ -13,29 +13,41 @@ pub enum GeometryKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DimensionAnchor {
+    pub entity_id: u64,
+    pub point_index: usize, // e.g. 0 for start, 1 for end, or vertex index
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DimensionKind {
     Linear {
         p1: Point2<f64>,
         p2: Point2<f64>,
         p_line: Point2<f64>,
         horizontal: bool,
+        p1_anchor: Option<DimensionAnchor>,
+        p2_anchor: Option<DimensionAnchor>,
     },
     Aligned {
         p1: Point2<f64>,
         p2: Point2<f64>,
         p_line: Point2<f64>,
+        p1_anchor: Option<DimensionAnchor>,
+        p2_anchor: Option<DimensionAnchor>,
     },
     Radial {
         center: Point2<f64>,
         point: Point2<f64>,
         p_text: Point2<f64>,
+        center_anchor: Option<DimensionAnchor>,
+        point_anchor: Option<DimensionAnchor>,
     },
 }
 
 impl DimensionKind {
     pub fn get_text_info(&self) -> (String, Point2<f64>, f64) {
         match self {
-            DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+            DimensionKind::Linear { p1, p2, p_line, horizontal, .. } => {
                 let val = if *horizontal { (p2.x - p1.x).abs() } else { (p2.y - p1.y).abs() };
                 let text = format!("{:.2}", val);
                 let pos = if *horizontal {
@@ -45,7 +57,7 @@ impl DimensionKind {
                 };
                 (text, pos, 0.0)
             }
-            DimensionKind::Aligned { p1, p2, p_line } => {
+            DimensionKind::Aligned { p1, p2, p_line, .. } => {
                 let dist = (p2 - p1).norm();
                 let dir = (p2 - p1).normalize();
                 let mut angle = dir.y.atan2(dir.x);
@@ -61,7 +73,7 @@ impl DimensionKind {
                 let pos = Point2::new((p1_dim.x + p2_dim.x) / 2.0, (p1_dim.y + p2_dim.y) / 2.0);
                 (format!("{:.2}", dist), pos, angle)
             }
-            DimensionKind::Radial { center, point, p_text } => {
+            DimensionKind::Radial { center, point, p_text, .. } => {
                 let radius = (point - center).norm();
                 (format!("R{:.2}", radius), *p_text, 0.0)
             }
@@ -69,14 +81,15 @@ impl DimensionKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entity {
+    pub id: u64,
     pub geometry: GeometryKind,
     pub layer: String,
     pub color_override: Option<[f32; 3]>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
     pub color: [f32; 3],
@@ -191,7 +204,7 @@ impl Geometry for GeometryKind {
                         let max_y = p1.y.max(p2.y).max(p_line.y);
                         (Point2::new(min_x, min_y), Point2::new(max_x, max_y))
                     }
-                    DimensionKind::Radial { center, point, p_text } => {
+                    DimensionKind::Radial { center, point, p_text, .. } => {
                         let min_x = center.x.min(point.x).min(p_text.x);
                         let min_y = center.y.min(point.y).min(p_text.y);
                         let max_x = center.x.max(point.x).max(p_text.x);
@@ -269,7 +282,7 @@ impl Geometry for GeometryKind {
             }
             GeometryKind::Dimension(dim) => {
                 match dim {
-                    DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+                    DimensionKind::Linear { p1, p2, p_line, horizontal, .. } => {
                         let (p1_dim, p2_dim) = if *horizontal {
                             ( Point2::new(p1.x, p_line.y), Point2::new(p2.x, p_line.y) )
                         } else {
@@ -281,7 +294,7 @@ impl Geometry for GeometryKind {
                         let d_ext2 = GeometryKind::Line { start: *p2, end: p2_dim }.distance_to(point);
                         d_line.min(d_ext1).min(d_ext2)
                     }
-                    DimensionKind::Aligned { p1, p2, p_line } => {
+                    DimensionKind::Aligned { p1, p2, p_line, .. } => {
                         let dir = (p2 - p1).normalize();
                         let normal = nalgebra::Vector2::new(-dir.y, dir.x);
                         let offset = (p_line - p1).dot(&normal);
@@ -293,7 +306,7 @@ impl Geometry for GeometryKind {
                         let d_ext2 = GeometryKind::Line { start: *p2, end: p2_dim }.distance_to(point);
                         d_line.min(d_ext1).min(d_ext2)
                     }
-                    DimensionKind::Radial { center, point: p_on_circle, p_text } => {
+                    DimensionKind::Radial { center, point: p_on_circle, p_text, .. } => {
                         let d_l1 = GeometryKind::Line { start: *center, end: *p_on_circle }.distance_to(point);
                         let d_l2 = GeometryKind::Line { start: *p_on_circle, end: *p_text }.distance_to(point);
                         d_l1.min(d_l2)
@@ -315,8 +328,9 @@ impl Geometry for Entity {
 }
 
 impl Entity {
-    pub fn new(geometry: GeometryKind, layer: &str) -> Self {
+    pub fn new(id: u64, geometry: GeometryKind, layer: &str) -> Self {
         Self {
+            id,
             geometry,
             layer: layer.to_string(),
             color_override: None,
@@ -394,26 +408,26 @@ mod tests {
     #[test]
     fn test_entity_serialization() {
         let entities = vec![
-            Entity::new(GeometryKind::Point(Point2::new(1.0, 2.0)), "0"),
-            Entity::new(GeometryKind::Line { 
+            Entity::new(1, GeometryKind::Point(Point2::new(1.0, 2.0)), "0"),
+            Entity::new(2, GeometryKind::Line { 
                 start: Point2::new(0.0, 0.0), 
                 end: Point2::new(10.0, 10.0) 
             }, "0"),
-            Entity::new(GeometryKind::Circle { 
+            Entity::new(3, GeometryKind::Circle { 
                 center: Point2::new(5.0, 5.0), 
                 radius: 2.5 
             }, "0"),
-            Entity::new(GeometryKind::Rectangle {
+            Entity::new(4, GeometryKind::Rectangle {
                 start: Point2::new(0.0, 0.0),
                 end: Point2::new(10.0, 5.0),
             }, "0"),
-            Entity::new(GeometryKind::Arc {
+            Entity::new(5, GeometryKind::Arc {
                 center: Point2::new(0.0, 0.0),
                 radius: 10.0,
                 start_angle: 0.0,
                 sweep_angle: 1.57,
             }, "0"),
-            Entity::new(GeometryKind::Polyline(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)]), "0"),
+            Entity::new(6, GeometryKind::Polyline(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)]), "0"),
         ];
 
         let json = serde_json::to_string(&entities).unwrap();
@@ -526,7 +540,7 @@ mod tests {
         let p2 = Point2::new(10.0, 0.0);
         let p_line = Point2::new(5.0, 5.0);
         
-        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true });
+        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true, p1_anchor: None, p2_anchor: None });
         let (min, max) = geom.bounding_box();
         // Includes p1, p2, and the p_line height
         assert_eq!(min, Point2::new(0.0, 0.0));
@@ -539,7 +553,7 @@ mod tests {
         let p2 = Point2::new(10.0, 0.0);
         let p_line = Point2::new(5.0, 5.0);
         
-        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true });
+        let geom = GeometryKind::Dimension(DimensionKind::Linear { p1, p2, p_line, horizontal: true, p1_anchor: None, p2_anchor: None });
         // Point on the dimension line (at y=5)
         assert!(geom.distance_to(&Point2::new(5.0, 5.0)) < 1e-6);
         // Point on extension line (at x=0, y=2.5)

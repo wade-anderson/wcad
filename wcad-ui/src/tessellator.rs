@@ -132,7 +132,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])], zoom: f32, height: 
             }
             GeometryKind::Dimension(dim) => {
                 match dim {
-                    DimensionKind::Linear { p1, p2, p_line, horizontal } => {
+                    DimensionKind::Linear { p1, p2, p_line, horizontal, .. } => {
                         let (_, p1_dim, p2_dim) = if *horizontal {
                             ( (p2.x - p1.x).abs(), Point2::new(p1.x, p_line.y), Point2::new(p2.x, p_line.y) )
                         } else {
@@ -161,7 +161,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])], zoom: f32, height: 
                         add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
                         add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
                     }
-                    DimensionKind::Aligned { p1, p2, p_line } => {
+                    DimensionKind::Aligned { p1, p2, p_line, .. } => {
                         let dir = (p2 - p1).normalize();
                         let normal = nalgebra::Vector2::new(-dir.y, dir.x);
                         let offset = (p_line - p1).dot(&normal);
@@ -190,7 +190,7 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])], zoom: f32, height: 
                         add_arrowhead(&mut builder, p1_dim, p2_dim, arrow_size);
                         add_arrowhead(&mut builder, p2_dim, p1_dim, arrow_size);
                     }
-                    DimensionKind::Radial { center, point: p_on_circle, p_text } => {
+                    DimensionKind::Radial { center, point: p_on_circle, p_text, .. } => {
                         // For radial, usually the leader is solid
                         builder.begin(point(center.x as f32, center.y as f32));
                         builder.line_to(point(p_on_circle.x as f32, p_on_circle.y as f32));
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_tessellate_line() {
-        let entity = Entity::new(GeometryKind::Line {
+        let entity = Entity::new(1, GeometryKind::Line {
             start: Point2::new(0.0, 0.0),
             end: Point2::new(1.0, 1.0),
         }, "0");
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_tessellate_circle() {
-        let entity = Entity::new(GeometryKind::Circle {
+        let entity = Entity::new(1, GeometryKind::Circle {
             center: Point2::new(0.0, 0.0),
             radius: 1.0,
         }, "0");
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_tessellate_rectangle() {
-        let entity = Entity::new(GeometryKind::Rectangle {
+        let entity = Entity::new(1, GeometryKind::Rectangle {
             start: Point2::new(0.0, 0.0),
             end: Point2::new(10.0, 5.0),
         }, "0");
