@@ -130,6 +130,25 @@ pub fn tessellate_entities(entities: &[(&Entity, [f32; 3])], zoom: f32, height: 
                     builder.end(false);
                 }
             }
+            GeometryKind::Image { top_left, bottom_right, .. } => {
+                let x1 = top_left.x as f32;
+                let y1 = top_left.y as f32;
+                let x2 = bottom_right.x as f32;
+                let y2 = bottom_right.y as f32;
+                // Bounding box
+                builder.begin(point(x1, y1));
+                builder.line_to(point(x2, y1));
+                builder.line_to(point(x2, y2));
+                builder.line_to(point(x1, y2));
+                builder.end(true);
+                // Diagonal cross to indicate image
+                builder.begin(point(x1, y1));
+                builder.line_to(point(x2, y2));
+                builder.end(false);
+                builder.begin(point(x2, y1));
+                builder.line_to(point(x1, y2));
+                builder.end(false);
+            }
             GeometryKind::Dimension(dim) => {
                 match dim {
                     DimensionKind::Linear { p1, p2, p_line, horizontal, .. } => {

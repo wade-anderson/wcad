@@ -1,6 +1,7 @@
 pub mod renderer;
 pub mod tessellator;
 pub mod printing;
+pub mod io;
 
 use libadwaita::prelude::*;
 use libadwaita::{Application, ApplicationWindow, HeaderBar};
@@ -335,7 +336,37 @@ impl AppState {
                         }
                     }
                 }
-                _ => {}
+                GeometryKind::Dimension(dim) => {
+                    let pts = match dim {
+                        DimensionKind::Linear { p1, p2, p_line, .. } => vec![*p1, *p2, *p_line],
+                        DimensionKind::Aligned { p1, p2, p_line, .. } => vec![*p1, *p2, *p_line],
+                        DimensionKind::Radial { center, point, p_text, .. } => vec![*center, *point, *p_text],
+                    };
+                    for (i, p) in pts.iter().enumerate() {
+                        let d = (p - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = *p;
+                            anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: i });
+                        }
+                    }
+                }
+                GeometryKind::Image { top_left, bottom_right, .. } => {
+                    let corners = [
+                        *top_left,
+                        Point2::new(bottom_right.x, top_left.y),
+                        *bottom_right,
+                        Point2::new(top_left.x, bottom_right.y),
+                    ];
+                    for (i, p) in corners.iter().enumerate() {
+                        let d = (p - point).norm();
+                        if d < best_dist {
+                            best_dist = d;
+                            snapped = *p;
+                            anchor = Some(wcad_core::domain::DimensionAnchor { entity_id: entity.id, point_index: i });
+                        }
+                    }
+                }
             }
         }
 
@@ -481,6 +512,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
     let btn_undo = Button::with_label("Undo");
     let btn_redo = Button::with_label("Redo");
     let btn_print = Button::builder().icon_name("printer-symbolic").build();
+    let btn_import = Button::builder().icon_name("document-open-symbolic").tooltip_text("Import DXF/SVG/Image").build();
+    let btn_export = Button::builder().icon_name("document-save-as-symbolic").tooltip_text("Export DXF/SVG/PNG").build();
     let btn_units = Button::with_label("Metric");
 
     let header = HeaderBar::builder()
@@ -488,6 +521,8 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
         .build();
     header.pack_start(&btn_open);
     header.pack_start(&btn_save);
+    header.pack_start(&btn_import);
+    header.pack_start(&btn_export);
     header.pack_start(&btn_print);
     header.pack_end(&btn_redo);
     header.pack_end(&btn_undo);
@@ -1148,6 +1183,12 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                             .build();
                         props_container.append(&row);
                     }
+                    GeometryKind::Image { top_left, bottom_right, .. } => {
+                        let row = libadwaita::ActionRow::builder()
+                            .title(&format!("Type: Image ({:.1}x{:.1})", (bottom_right.x - top_left.x).abs(), (bottom_right.y - top_left.y).abs()))
+                            .build();
+                        props_container.append(&row);
+                    }
                     GeometryKind::Dimension(dim) => {
                         let title = match dim {
                             DimensionKind::Linear { .. } => "Type: Linear Dim",
@@ -1494,6 +1535,127 @@ pub fn build_ui(app: &Application) -> ApplicationWindow {
                     let entities = state.borrow().entities.clone();
                     if let Ok(content) = serde_json::to_string_pretty(&entities) {
                         let _ = std::fs::write(path, content);
+                    }
+                }
+            }
+        });
+    });
+
+    let app_state_import = app_state.clone();
+    let viewport_import_ref = viewport_grid_ref.clone();
+    let update_sidebar_import = update_sidebar.clone();
+    btn_import.connect_clicked(move |_| {
+        let state = app_state_import.clone();
+        let viewport_ref = viewport_import_ref.clone();
+        let update_sidebar = update_sidebar_import.clone();
+        let dialog = gtk4::FileDialog::builder()
+            .title("Import File")
+            .build();
+        
+        let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+        let dxf_filter = gtk4::FileFilter::new();
+        dxf_filter.set_name(Some("DXF Files"));
+        dxf_filter.add_pattern("*.dxf");
+        filters.append(&dxf_filter);
+        
+        let img_filter = gtk4::FileFilter::new();
+        img_filter.set_name(Some("Image Files"));
+        img_filter.add_pixbuf_formats();
+        filters.append(&img_filter);
+        
+        dialog.set_filters(Some(&filters));
+
+        dialog.open(None::<&ApplicationWindow>, None::<&gtk4::gio::Cancellable>, move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    if ext == "dxf" {
+                        if let Ok(data) = std::fs::read(&path) {
+                            let new_geoms = io::import_dxf(&data);
+                            {
+                                let mut app = state.borrow_mut();
+                                app.push_undo();
+                                for geom in new_geoms {
+                                    let id = app.next_entity_id;
+                                    app.entities.push(Entity::new(id, geom, "0"));
+                                    app.next_entity_id += 1;
+                                }
+                            }
+                            update_sidebar();
+                            if let Some(vp) = viewport_ref.borrow().as_ref() {
+                                vp.queue_draw();
+                            }
+                        }
+                    } else if ext == "png" || ext == "jpg" || ext == "jpeg" {
+                        if let Ok(data) = std::fs::read(&path) {
+                             {
+                                let mut app = state.borrow_mut();
+                                app.push_undo();
+                                let id = app.next_entity_id;
+                                // Put at origin for now
+                                app.entities.push(Entity::new(id, GeometryKind::Image {
+                                    top_left: Point2::new(0.0, 100.0),
+                                    bottom_right: Point2::new(100.0, 0.0),
+                                    data,
+                                    format: ext,
+                                }, "0"));
+                                app.next_entity_id += 1;
+                            }
+                            update_sidebar();
+                            if let Some(vp) = viewport_ref.borrow().as_ref() {
+                                vp.queue_draw();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+
+    let app_state_export = app_state.clone();
+    btn_export.connect_clicked(move |_| {
+        let state = app_state_export.clone();
+        let dialog = gtk4::FileDialog::builder()
+            .title("Export File")
+            .build();
+            
+        let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+        let dxf_filter = gtk4::FileFilter::new();
+        dxf_filter.set_name(Some("DXF File"));
+        dxf_filter.add_pattern("*.dxf");
+        filters.append(&dxf_filter);
+        
+        let svg_filter = gtk4::FileFilter::new();
+        svg_filter.set_name(Some("SVG File"));
+        svg_filter.add_pattern("*.svg");
+        filters.append(&svg_filter);
+        
+        let png_filter = gtk4::FileFilter::new();
+        png_filter.set_name(Some("PNG Image"));
+        png_filter.add_pattern("*.png");
+        filters.append(&png_filter);
+        
+        dialog.set_filters(Some(&filters));
+
+        dialog.save(None::<&ApplicationWindow>, None::<&gtk4::gio::Cancellable>, move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    let entities = state.borrow().entities.clone();
+                    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                    match ext.as_str() {
+                        "dxf" => {
+                            let data = io::export_dxf(&entities);
+                            let _ = std::fs::write(path, data);
+                        }
+                        "svg" => {
+                            let content = io::export_svg(&entities);
+                            let _ = std::fs::write(path, content);
+                        }
+                        "png" => {
+                            let data = io::export_png(&entities, 2048, 2048);
+                            let _ = std::fs::write(path, data);
+                        }
+                        _ => {}
                     }
                 }
             }

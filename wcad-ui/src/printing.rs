@@ -117,6 +117,22 @@ fn render_to_cairo(context: &gtk4::PrintContext, app: &AppState) {
             GeometryKind::Dimension(dim) => {
                 render_dim_to_cairo(&cr, dim, scale);
             }
+            GeometryKind::Image { top_left, bottom_right, .. } => {
+                let x = top_left.x.min(bottom_right.x);
+                let y = top_left.y.min(bottom_right.y);
+                let w = (bottom_right.x - top_left.x).abs();
+                let h = (bottom_right.y - top_left.y).abs();
+                cr.rectangle(x, y, w, h);
+                cr.set_dash(&[2.0 / scale, 2.0 / scale], 0.0);
+                let _ = cr.stroke();
+                cr.set_dash(&[], 0.0);
+                // Diagonal cross
+                cr.move_to(top_left.x, top_left.y);
+                cr.line_to(bottom_right.x, bottom_right.y);
+                cr.move_to(bottom_right.x, top_left.y);
+                cr.line_to(top_left.x, bottom_right.y);
+                let _ = cr.stroke();
+            }
         }
     }
 }

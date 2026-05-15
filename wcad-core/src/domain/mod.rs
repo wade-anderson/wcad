@@ -10,6 +10,7 @@ pub enum GeometryKind {
     Arc { center: Point2<f64>, radius: f64, start_angle: f64, sweep_angle: f64 },
     Polyline(Vec<Point2<f64>>),
     Dimension(DimensionKind),
+    Image { top_left: Point2<f64>, bottom_right: Point2<f64>, data: Vec<u8>, format: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,6 +214,12 @@ impl Geometry for GeometryKind {
                     }
                 }
             }
+            GeometryKind::Image { top_left, bottom_right, .. } => {
+                (
+                    Point2::new(top_left.x.min(bottom_right.x), top_left.y.min(bottom_right.y)),
+                    Point2::new(top_left.x.max(bottom_right.x), top_left.y.max(bottom_right.y))
+                )
+            }
         }
     }
 
@@ -312,6 +319,16 @@ impl Geometry for GeometryKind {
                         d_l1.min(d_l2)
                     }
                 }
+            }
+            GeometryKind::Image { top_left, bottom_right, .. } => {
+                let min_x = top_left.x.min(bottom_right.x);
+                let min_y = top_left.y.min(bottom_right.y);
+                let max_x = top_left.x.max(bottom_right.x);
+                let max_y = top_left.y.max(bottom_right.y);
+                
+                let dx = (min_x - point.x).max(0.0).max(point.x - max_x);
+                let dy = (min_y - point.y).max(0.0).max(point.y - max_y);
+                (dx*dx + dy*dy).sqrt()
             }
         }
     }
@@ -558,5 +575,36 @@ mod tests {
         assert!(geom.distance_to(&Point2::new(5.0, 5.0)) < 1e-6);
         // Point on extension line (at x=0, y=2.5)
         assert!(geom.distance_to(&Point2::new(0.0, 2.5)) < 1e-6);
+    }
+
+    #[test]
+    fn test_image_bounding_box() {
+        let img = GeometryKind::Image {
+            top_left: Point2::new(0.0, 10.0),
+            bottom_right: Point2::new(20.0, 0.0),
+            data: vec![],
+            format: "png".to_string(),
+        };
+        let (min, max) = img.bounding_box();
+        assert_eq!(min, Point2::new(0.0, 0.0));
+        assert_eq!(max, Point2::new(20.0, 10.0));
+    }
+
+    #[test]
+    fn test_image_distance() {
+        let img = GeometryKind::Image {
+            top_left: Point2::new(0.0, 10.0),
+            bottom_right: Point2::new(20.0, 0.0),
+            data: vec![],
+            format: "png".to_string(),
+        };
+        // Inside
+        assert_eq!(img.distance_to(&Point2::new(5.0, 5.0)), 0.0);
+        // Outside (right)
+        assert_eq!(img.distance_to(&Point2::new(25.0, 5.0)), 5.0);
+        // Outside (top)
+        assert_eq!(img.distance_to(&Point2::new(5.0, 15.0)), 5.0);
+        // Outside (corner)
+        assert!((img.distance_to(&Point2::new(23.0, 14.0)) - 5.0).abs() < 1e-6);
     }
 }
