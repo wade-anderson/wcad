@@ -22,31 +22,37 @@ WCAD is a high-performance, open-source 2D Computer-Aided Design (CAD) applicati
 
 #### 2.1 Geometric Entities
 The application must support the following core entities:
-- **Primitives**: Points, Lines, Circles, Arcs, Ellipses.
+- **Primitives**: Points, Lines, Circles, Arcs, Rectangles, Ellipses.
 - **Complex Entities**: Polylines (with arc segments), Splines (NURBS-based), and Hatch patterns.
-- **Annotations**: Single-line and multi-line text, Dimensions (Linear, Aligned, Radial, Angular).
+- **Annotations**: Single-line and multi-line text, Associative Dimensions (Linear, Aligned, Radial, Angular).
 - **Images**: Reference image overlays with transparency and scaling.
 
 #### 2.2 Drafting & Precision
 - **Coordinate Systems**: Absolute, Relative, and Polar coordinates.
 - **Object Snapping (OSNAP)**: Endpoint, Midpoint, Center, Intersection, Perpendicular, Tangent, and Grid Snap.
-- **Constraints**: Basic 2D geometric constraints (Parallel, Perpendicular, Tangent, Coincident).
+- **Grid System**: Adaptive scaling based on zoom level (infinite detail support) with no arbitrary coordinate limits.
+- **Constraints**: Basic 2D geometric constraints and Associative Dimensioning (automatic sync of dimension values and positions when anchored geometry moves).
 - **Unit Support**: Metric (mm, cm, m) and Imperial (in, ft, fractional representation).
 
 #### 2.3 Layer Management
-- Hierarchical layer organization.
+- Hierarchical layer organization with support for custom naming and manual reordering.
 - Visibility, Locking, and Printability toggles per layer.
 - Override attributes (Color, Linetype, Lineweight) at the layer level.
 
 #### 2.4 Modification Tools
 - **Standard Edits**: Move, Copy, Rotate, Scale, Mirror.
 - **Geometry Logic**: Trim, Extend, Offset, Fillet, Chamfer.
+- **Property Editor**: Intelligent sidebar for viewing and editing entity attributes, featuring:
+    - **Derived Properties**: Direct editing of "Width", "Height", and "Radius" regardless of internal storage format.
+    - **Relative Synchronization**: Automatic adjustment of related coordinates when a dimension or property is modified.
+    - **Undo Integration**: Full non-destructive history for all property changes.
 - **Organization**: Grouping/Ungrouping and Block/Symbol creation for reusability.
 
 #### 2.5 Data I/O
 - **Native Format**: A human-readable JSON-based format (or a lean binary format with a JSON sidecar).
 - **Import**: DXF (R12-R2018), SVG (for vector art conversion), and Image files.
 - **Export**: DXF, SVG, PDF (Technical drawing layout), and high-resolution PNG/JPEG.
+- **Printing**: Native GTK-based printing workflow with vector-accurate output and scale management.
 
 ---
 
